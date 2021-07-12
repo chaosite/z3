@@ -16,13 +16,14 @@ Author:
 --*/
 #pragma once
 
+#include <cstdint>
 #include <string>
-#include "util/vector.h"
 #include "util/buffer.h"
+#include "util/rational.h"
 
 class zstring {
 private:
-    buffer<unsigned> m_buffer;
+    buffer<uint32_t> m_buffer;
     bool well_formed() const;
     bool uses_unicode() const;
     bool is_escape_char(char const *& s, unsigned& result);
@@ -31,9 +32,10 @@ public:
     static unsigned unicode_num_bits() { return 18; }
     static unsigned ascii_max_char() { return 255; }
     static unsigned ascii_num_bits() { return 8; }
-    zstring() {}
+    zstring() = default;
     zstring(char const* s);
     zstring(const std::string &str) : zstring(str.c_str()) {}
+    zstring(rational const& r): zstring(r.to_string()) {}
     zstring(unsigned sz, unsigned const* s) { m_buffer.append(sz, s); SASSERT(well_formed()); }
     zstring(unsigned ch);
     zstring replace(zstring const& src, zstring const& dst) const;
@@ -51,6 +53,7 @@ public:
     zstring operator+(zstring const& other) const;
     bool operator==(const zstring& other) const;
     bool operator!=(const zstring& other) const;
+    unsigned hash() const;
 
     friend std::ostream& operator<<(std::ostream &os, const zstring &str);
     friend bool operator<(const zstring& lhs, const zstring& rhs);

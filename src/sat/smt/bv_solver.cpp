@@ -55,6 +55,7 @@ namespace bv {
         m_ackerman(*this),
         m_bb(m, get_config()),
         m_find(*this) {
+        m_bb.set_flat(false);
     }
 
     void solver::fixed_var_eh(theory_var v1) {
@@ -95,14 +96,20 @@ namespace bv {
         result.reset();
         unsigned i = 0;
         for (literal b : m_bits[v]) {
-            switch (ctx.s().value(b)) {
-            case l_false:
-                break;
-            case l_undef:
-                return false;
-            case l_true:
+            if (b == ~m_true) 
+                ;
+            else if (b == m_true) 
                 result += power2(i);
-                break;
+            else {
+                switch (ctx.s().value(b)) {
+                case l_false:
+                    break;
+                case l_undef:
+                    return false;
+                case l_true:
+                    result += power2(i);
+                    break;
+                }
             }
             ++i;
         }
@@ -348,8 +355,6 @@ namespace bv {
             eq = m.mk_eq(e1, e2);       
             ctx.drat_eq_def(leq, eq);
         }
-
-        static unsigned s_count = 0;
 
         sat::literal_vector lits;
         switch (c.m_kind) {

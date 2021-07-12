@@ -350,6 +350,17 @@ func_decl* seq_decl_plugin::mk_left_assoc_fun(decl_kind k, unsigned arity, sort*
     return mk_assoc_fun(k, arity, domain, range, k_seq, k_string, false);
 }
 
+func_decl* seq_decl_plugin::mk_ubv2s(unsigned arity, sort* const* domain) {
+    ast_manager& m = *m_manager;
+    if (arity != 1)
+        m.raise_exception("Invalid str.from_ubv expects one bit-vector argument");
+    bv_util bv(m);
+    if (!bv.is_bv_sort(domain[0]))
+        m.raise_exception("Invalid str.from_ubv expects one bit-vector argument");
+    sort* rng = m_string;
+    return m.mk_func_decl(symbol("str.from_ubv"), arity, domain, rng, func_decl_info(m_family_id, OP_STRING_UBVTOS));    
+}
+
 func_decl* seq_decl_plugin::mk_assoc_fun(decl_kind k, unsigned arity, sort* const* domain, sort* range, decl_kind k_seq, decl_kind k_string, bool is_right) {
     ast_manager& m = *m_manager;
     sort_ref rng(m);
@@ -375,7 +386,7 @@ func_decl * seq_decl_plugin::mk_func_decl(decl_kind k, unsigned num_parameters, 
     case OP_SEQ_EMPTY:
         match(*m_sigs[k], arity, domain, range, rng);
         if (rng == m_string) {
-            parameter param(symbol(""));
+            parameter param(zstring(""));
             return mk_func_decl(OP_STRING_CONST, 1, &param, 0, nullptr, m_string);
         }
         else {
@@ -400,14 +411,14 @@ func_decl * seq_decl_plugin::mk_func_decl(decl_kind k, unsigned num_parameters, 
     case OP_STRING_STOI:
     case OP_STRING_LT:
     case OP_STRING_LE:
-        match(*m_sigs[k], arity, domain, range, rng);
-        return m.mk_func_decl(m_sigs[k]->m_name, arity, domain, rng, func_decl_info(m_family_id, k));
     case OP_STRING_IS_DIGIT:
     case OP_STRING_TO_CODE:
     case OP_STRING_FROM_CODE:
         match(*m_sigs[k], arity, domain, range, rng);
         return m.mk_func_decl(m_sigs[k]->m_name, arity, domain, rng, func_decl_info(m_family_id, k));
-        
+    case OP_STRING_UBVTOS:
+        NOT_IMPLEMENTED_YET();
+
     case _OP_REGEXP_FULL_CHAR:
         m_has_re = true;
         if (!range) range = mk_reglan();
@@ -474,7 +485,7 @@ func_decl * seq_decl_plugin::mk_func_decl(decl_kind k, unsigned num_parameters, 
         m.raise_exception("Incorrect arguments used for re.^. Expected one non-negative integer parameter");
 
     case OP_STRING_CONST:
-        if (!(num_parameters == 1 && arity == 0 && parameters[0].is_symbol())) {
+        if (!(num_parameters == 1 && arity == 0 && parameters[0].is_zstring())) {
             m.raise_exception("invalid string declaration");
         }
         return m.mk_const_decl(m_stringc_sym, m_string,
@@ -503,7 +514,7 @@ func_decl * seq_decl_plugin::mk_func_decl(decl_kind k, unsigned num_parameters, 
         if (!(num_parameters == 1 && parameters[0].is_int())) 
             m.raise_exception("character literal expects integer parameter");
         zstring zs(parameters[0].get_int());        
-        parameter p(zs.encode());
+        parameter p(zs);
         return m.mk_const_decl(m_stringc_sym, m_string,func_decl_info(m_family_id, OP_STRING_CONST, 1, &p));
     }
         
@@ -615,6 +626,7 @@ void seq_decl_plugin::get_op_names(svector<builtin_name> & op_names, symbol cons
     op_names.push_back(builtin_name("int.to.str", OP_STRING_ITOS));
     op_names.push_back(builtin_name("re.nostr",  _OP_REGEXP_EMPTY));
     op_names.push_back(builtin_name("re.complement", OP_RE_COMPLEMENT));
+    op_names.push_back(builtin_name("str.from_ubv", OP_STRING_UBVTOS));
 }
 
 void seq_decl_plugin::get_sort_names(svector<builtin_name> & sort_names, symbol const & logic) {
@@ -630,16 +642,8 @@ void seq_decl_plugin::get_sort_names(svector<builtin_name> & sort_names, symbol 
     sort_names.push_back(builtin_name("StringSequence", _STRING_SORT));
 }
 
-app* seq_decl_plugin::mk_string(symbol const& s) {
-    parameter param(s);
-    func_decl* f = m_manager->mk_const_decl(m_stringc_sym, m_string,
-                                            func_decl_info(m_family_id, OP_STRING_CONST, 1, &param));
-    return m_manager->mk_const(f);
-}
-
 app* seq_decl_plugin::mk_string(zstring const& s) {
-    symbol sym(s.encode());
-    parameter param(sym);
+    parameter param(s);
     func_decl* f = m_manager->mk_const_decl(m_stringc_sym, m_string,
                                             func_decl_info(m_family_id, OP_STRING_CONST, 1, &param));
     return m_manager->mk_const(f);
@@ -792,7 +796,7 @@ app* seq_util::mk_lt(expr* ch1, expr* ch2) const {
 
 bool seq_util::str::is_string(func_decl const* f, zstring& s) const {
     if (is_string(f)) {
-        s = zstring(f->get_parameter(0).get_symbol().bare_str());
+        s = f->get_parameter(0).get_zstring();
         return true;
     }
     else {
@@ -1277,7 +1281,7 @@ seq_util::rex::info seq_util::rex::mk_info_rec(app* e) const {
         case OP_RE_OPTION:
             i1 = get_info_rec(e->get_arg(0));
             return i1.opt();
-        case OP_RE_RANGE:
+        case OP_RE_RANGE: 
         case OP_RE_FULL_CHAR_SET:
         case OP_RE_OF_PRED:
             //TBD: check if the character predicate contains uninterpreted symbols or is nonground or is unsat
@@ -1480,7 +1484,7 @@ seq_util::rex::info seq_util::rex::info::orelse(seq_util::rex::info const& i) co
             // unsigned ite_min_length = std::min(min_length, i.min_length);
             // lbool ite_nullable = (nullable == i.nullable ? nullable : l_undef);
             // TBD: whether ite is interpreted or not depends on whether the condition is interpreted and both branches are interpreted
-            return info(false, false, false, false, normalized && i.normalized, monadic && i.monadic, singleton && i.singleton, nullable, min_length, std::max(star_height, i.star_height));
+            return info(false, false, false, false, normalized && i.normalized, monadic && i.monadic, singleton && i.singleton, nullable, std::min(min_length, i.min_length), std::max(star_height, i.star_height));
         }
         else
             return i;

@@ -218,7 +218,7 @@ namespace smt {
             TRACE("model_checker", tout << "Got some value " << sk_value << "\n";);
 
             if (use_inv) {
-                unsigned sk_term_gen;
+	            unsigned sk_term_gen = 0;
                 expr * sk_term = m_model_finder.get_inv(q, i, sk_value, sk_term_gen);
                 if (sk_term != nullptr) {
                     TRACE("model_checker", tout << "Found inverse " << mk_pp(sk_term, m) << "\n";);
@@ -319,7 +319,14 @@ namespace smt {
     struct scoped_ctx_push {
         context* c;
         scoped_ctx_push(context* c): c(c) { c->push(); }
-        ~scoped_ctx_push() { c->pop(1); }
+        ~scoped_ctx_push() { 
+            try {
+                c->pop(1);
+            }
+            catch (...) {
+                ;
+            }
+        }
     };
 
     /**

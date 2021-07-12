@@ -275,6 +275,9 @@ namespace arith {
             else {
                 if (is_app(n)) {
                     internalize_args(to_app(n));
+                    for (expr* arg : *to_app(n)) 
+                        if (a.is_arith_expr(arg))
+                            internalize_term(arg);
                 }
                 theory_var v = mk_evar(n);
                 coeffs[vars.size()] = coeffs[index];
@@ -291,9 +294,8 @@ namespace arith {
         st.to_ensure_enode().reset();
         for (unsigned i = st.to_ensure_var().size(); i-- > 0; ) {
             expr* n = st.to_ensure_var()[i];
-            if (is_app(n)) {
+            if (is_app(n)) 
                 internalize_term(to_app(n));
-            }
         }
         st.to_ensure_var().reset();
     }
@@ -382,12 +384,11 @@ namespace arith {
         updt_unassigned_bounds(v, +1);
         m_bounds_trail.push_back(v);
         m_bool_var2bound.insert(bv, b);
-        TRACE("arith_verbose", tout << "Internalized " << bv << ": " << mk_pp(atom, m) << "\n";);
+        TRACE("arith_verbose", tout << "Internalized " << lit << ": " << mk_pp(atom, m) << " " << *b << "\n";);
         m_new_bounds.push_back(b);
         //add_use_lists(b);
         return true;
     }
-
 
     bool solver::internalize_term(expr* term) {
         if (!has_var(term))
@@ -424,7 +425,7 @@ namespace arith {
         TRACE("arith", tout << mk_pp(t, m) << " " << force << " " << reflect(t) << "\n";);
         if (!force && !reflect(t))
             return;
-        for (expr* arg : *t)
+        for (expr* arg : *t) 
             e_internalize(arg);
     }
 
@@ -435,8 +436,8 @@ namespace arith {
         theory_var v = mk_evar(t);
         if (_has_var)
             return v;
-        theory_var w = mk_evar(n);
         internalize_term(n);
+        theory_var w = mk_evar(n);
 
         if (p == 0) {
             mk_power0_axioms(t, n);
@@ -583,11 +584,10 @@ namespace arith {
         if (e->is_attached_to(get_id()))
             return e->get_th_var(get_id());
         theory_var v = mk_var(e);
-        TRACE("arith", tout << "fresh var: v" << v << " " << mk_pp(n, m) << "\n";);
+        TRACE("arith_verbose", tout << "v" << v << " " << mk_pp(n, m) << "\n";);
         SASSERT(m_bounds.size() <= static_cast<unsigned>(v) || m_bounds[v].empty());
         reserve_bounds(v);
         ctx.attach_th_var(e, this, v);
-        TRACE("arith", tout << mk_pp(n, m) << " " << v << "\n";);
         SASSERT(euf::null_theory_var != v);
         return v;
     }

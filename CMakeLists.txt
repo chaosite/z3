@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.4)
 
 set(CMAKE_USER_MAKE_RULES_OVERRIDE_CXX "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cxx_compiler_flags_overrides.cmake")
-project(Z3 VERSION 4.8.11.0 LANGUAGES CXX)
+project(Z3 VERSION 4.8.12.0 LANGUAGES CXX)
 
 ################################################################################
 # Project version
@@ -351,6 +351,7 @@ option(Z3_BUILD_LIBZ3_SHARED "Build libz3 as a shared library if true, otherwise
 ################################################################################
 if (NOT MSVC)
   z3_add_cxx_flag("-fvisibility=hidden" REQUIRED)
+  z3_add_cxx_flag("-fvisibility-inlines-hidden" REQUIRED)
 endif()
 
 ################################################################################

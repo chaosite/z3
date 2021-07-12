@@ -1224,16 +1224,10 @@ namespace q {
                 m_mp_already_processed[first_idx] = true;
                 linearise_multi_pattern(first_idx);
             }
-
-#ifdef Z3DEBUG
-            for (unsigned i = 0; i < m_qa->get_num_decls(); i++) {
-                CTRACE("mam_new_bug", m_vars[i] < 0, tout << mk_ismt2_pp(m_qa, m) << "\ni: " << i << " m_vars[i]: " << m_vars[i] << "\n";
-                       tout << "m_mp:\n" << mk_ismt2_pp(m_mp, m) << "\n";
-                       tout << "tree:\n" << *m_tree << "\n";
-                       );
-                SASSERT(m_vars[i] >= 0);
-            }
-#endif
+            for (unsigned i = 0; i < m_qa->get_num_decls(); i++) 
+                if (m_vars[i] == -1)
+                    return;
+            
             SASSERT(head->m_next == 0);
             m_seq.push_back(m_ct_manager.mk_yield(m_qa, m_mp, m_qa->get_num_decls(), reinterpret_cast<unsigned*>(m_vars.begin())));
 
@@ -1997,7 +1991,8 @@ namespace q {
             TRACE("trigger_bug", tout << "execute for code tree:\n"; t->display(tout););
             init(t);
             if (t->filter_candidates()) {
-                for (enode* app : t->get_candidates()) {
+                for (unsigned i = 0; i < t->get_candidates().size(); ++i) {
+                    enode* app = t->get_candidates()[i];
                     TRACE("trigger_bug", tout << "candidate\n" << mk_ismt2_pp(app->get_expr(), m) << "\n";);
                     if (!app->is_marked1() && app->is_cgr()) {
                         if (ctx.resource_limits_exceeded() || !execute_core(t, app))
@@ -2011,7 +2006,8 @@ namespace q {
                 }
             }
             else {
-                for (enode* app : t->get_candidates()) {
+                for (unsigned i = 0; i < t->get_candidates().size(); ++i) {
+                    enode* app = t->get_candidates()[i];
                     TRACE("trigger_bug", tout << "candidate\n" << mk_ismt2_pp(app->get_expr(), m) << "\n";);
                     if (app->is_cgr()) {
                         TRACE("trigger_bug", tout << "is_cgr\n";);
@@ -2260,6 +2256,8 @@ namespace q {
 #endif
         // It doesn't make sense to process an irrelevant enode.
         TRACE("mam_execute_core", tout << "EXEC " << t->get_root_lbl()->get_name() << "\n";);
+        if (!ctx.is_relevant(n))
+            return false;
         SASSERT(ctx.is_relevant(n));
         m_pattern_instances.reset();
         m_min_top_generation.reset();
@@ -3036,6 +3034,7 @@ namespace q {
         ptr_vector<code_tree>       m_tmp_trees;
         ptr_vector<func_decl>       m_tmp_trees_to_delete;
         ptr_vector<code_tree>       m_to_match;
+        unsigned                    m_to_match_head = 0;
         typedef std::pair<quantifier *, app *> qp_pair;
         svector<qp_pair>            m_new_patterns; // recently added patterns
 
@@ -3065,16 +3064,14 @@ namespace q {
         enode *                     m_other { nullptr }; // temp field
         bool                        m_check_missing_instances { false };
 
-        class reset_to_match : public trail {
+        class pop_to_match : public trail {
             mam_impl& i;
         public:
-            reset_to_match(mam_impl& i):i(i) {}
+            pop_to_match(mam_impl& i):i(i) {}
             void undo() override {
-                if (i.m_to_match.empty())
-                    return;
-                for (code_tree* t : i.m_to_match) 
-                    t->reset_candidates();
-                i.m_to_match.reset();
+                code_tree* t = i.m_to_match.back();
+                t->reset_candidates();
+                i.m_to_match.pop_back();
             }
         };
         
@@ -3098,12 +3095,12 @@ namespace q {
         }
 
         void add_candidate(code_tree * t, enode * app) {
-            if (t != nullptr) {
+            if (t) {
                 TRACE("mam_candidate", tout << "adding candidate:\n" << mk_ll_pp(app->get_expr(), m););
-                if (m_to_match.empty()) 
-                    ctx.push(reset_to_match(*this));
-                if (!t->has_candidates()) 
+                if (!t->has_candidates()) {
+                    ctx.push(pop_to_match(*this));
                     m_to_match.push_back(t);
+                }
                 t->add_candidate(app);
             }
         }
@@ -3708,9 +3705,12 @@ namespace q {
                 SASSERT(tmp_tree != 0);
                 SASSERT(!m_egraph.enodes_of(lbl).empty());
                 m_interpreter.init(tmp_tree);
-                for (enode * app : m_egraph.enodes_of(lbl)) 
+                auto& nodes = m_egraph.enodes_of(lbl);
+                for (unsigned i = 0; i < nodes.size(); ++i) {
+                    enode* app = nodes[i];
                     if (ctx.is_relevant(app))
                         m_interpreter.execute_core(tmp_tree, app);
+                }
                 m_tmp_trees[lbl_id] = nullptr;
                 dealloc(tmp_tree);
             }
@@ -3761,7 +3761,6 @@ namespace q {
 
         void reset() override {
             m_trees.reset();
-            m_to_match.reset();
             m_new_patterns.reset();
             m_is_plbl.reset();
             m_is_clbl.reset();
@@ -3779,12 +3778,16 @@ namespace q {
 
         void propagate() override {
             TRACE("trigger_bug", tout << "match\n"; display(tout););
-            for (code_tree* t : m_to_match) {
-                SASSERT(t->has_candidates());
-                m_interpreter.execute(t);
-                t->reset_candidates();
+            if (m_to_match_head >= m_to_match.size())
+                return;
+            ctx.push(value_trail<unsigned>(m_to_match_head));
+            for (; m_to_match_head < m_to_match.size(); ++m_to_match_head) {
+                code_tree* t = m_to_match[m_to_match_head];
+                if (t->has_candidates()) {
+                    m_interpreter.execute(t);
+                    t->reset_candidates();
+                }
             }
-            m_to_match.reset();
             if (!m_new_patterns.empty()) {
                 match_new_patterns();
                 m_new_patterns.reset();

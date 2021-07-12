@@ -75,7 +75,6 @@ struct goal2sat::imp : public sat::sat_internalizer {
     expr_ref_vector             m_trail;
     func_decl_ref_vector        m_unhandled_funs;
     bool                        m_default_external;
-    bool                        m_xor_solver { false };
     bool                        m_euf { false };
     bool                        m_drat { false };
     bool                        m_is_redundant { false };
@@ -108,7 +107,6 @@ struct goal2sat::imp : public sat::sat_internalizer {
         sat_params sp(p);
         m_ite_extra  = p.get_bool("ite_extra", true);
         m_max_memory = megabytes_to_bytes(p.get_uint("max_memory", UINT_MAX));
-        m_xor_solver = p.get_bool("xor_solver", false);
         m_euf = sp.euf();
         m_drat = sp.drat_file().is_non_empty_string();
     }
@@ -138,6 +136,10 @@ struct goal2sat::imp : public sat::sat_internalizer {
     void add_dual_root(unsigned n, sat::literal const* lits) {
         if (relevancy_enabled())
             ensure_euf()->add_root(n, lits);
+    }
+
+    void add_dual_root(sat::literal lit) {
+        add_dual_root(1, &lit);
     }
     
     void mk_clause(sat::literal l) {
@@ -201,6 +203,7 @@ struct goal2sat::imp : public sat::sat_internalizer {
             // create fake variable to represent true;
             m_true = sat::literal(add_var(false, m.mk_true()), false);
             mk_clause(m_true); // v is true
+            add_dual_root(1, &m_true);
         }
         return m_true;
     }
@@ -225,6 +228,8 @@ struct goal2sat::imp : public sat::sat_internalizer {
         if (!m_expr2var_replay || !m_expr2var_replay->find(t, v))  
             v = add_var(true, t);
         m_map.insert(t, v);
+        if (relevancy_enabled() && (m.is_true(t) || m.is_false(t))) 
+            add_dual_root(sat::literal(v, m.is_false(t)));
         return v;
     }
 
@@ -576,7 +581,9 @@ struct goal2sat::imp : public sat::sat_internalizer {
         }
     }
 
-    void convert_iff2(app * t, bool root, bool sign) {
+    void convert_iff(app * t, bool root, bool sign) {
+        if (t->get_num_args() != 2)
+            throw default_exception("unexpected number of arguments to xor");
         SASSERT(t->get_num_args() == 2);
         unsigned sz = m_result_stack.size();
         SASSERT(sz >= 2);
@@ -607,13 +614,6 @@ struct goal2sat::imp : public sat::sat_internalizer {
                 l.neg();
             m_result_stack.push_back(l);
         }
-    }
-
-    void convert_iff(app * t, bool root, bool sign) {
-        if (!m_euf && is_xor(t))
-            convert_ba(t, root, sign);
-        else               
-            convert_iff2(t, root, sign);
     }
 
     func_decl_ref_vector const& interpreted_funs() {
@@ -721,10 +721,6 @@ struct goal2sat::imp : public sat::sat_internalizer {
         }
     }
 
-    bool is_xor(app* t) const {
-        return m_xor_solver && m.is_iff(t) && m.is_iff(t->get_arg(1));
-    }
-
     struct scoped_stack {
         imp& i;
         sat::literal_vector& r;
@@ -748,7 +744,7 @@ struct goal2sat::imp : public sat::sat_internalizer {
     };
 
     void process(expr* n, bool is_root, bool redundant) {
-        TRACE("goal2sat", tout << "process-begin " << mk_bounded_pp(n, m, 3) 
+        TRACE("goal2sat", tout << "process-begin " << mk_bounded_pp(n, m, 2) 
             << " root: " << is_root 
             << " result-stack: " << m_result_stack.size() 
             << " frame-stack: " << m_frame_stack.size() << "\n";);
@@ -782,18 +778,13 @@ struct goal2sat::imp : public sat::sat_internalizer {
                 visit(t->get_arg(0), root, !sign);
                 continue;
             }
-            if (!m_euf && is_xor(t)) {
-                convert_ba(t, root, sign);
-                m_frame_stack.pop_back();
-                continue;
-            }
             unsigned num = t->get_num_args();
             while (m_frame_stack[fsz-1].m_idx < num) {
                 expr * arg = t->get_arg(m_frame_stack[fsz-1].m_idx);
                 m_frame_stack[fsz - 1].m_idx++;
                 if (!visit(arg, false, false))
                     goto loop;
-                TRACE("goal2sat_bug", tout << "visit " << mk_bounded_pp(t, m, 2) << " result stack: " << m_result_stack.size() << "\n";);
+                TRACE("goal2sat_bug", tout << "visit " << mk_bounded_pp(arg, m, 2) << " result stack: " << m_result_stack.size() << "\n";);
             }
             TRACE("goal2sat_bug", tout << "converting\n";
                   tout << mk_bounded_pp(t, m, 2) << " root: " << root << " sign: " << sign << "\n";

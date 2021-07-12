@@ -645,7 +645,6 @@ namespace datatype {
             return false;
         func_decl* c = get_accessor_constructor(f);
         SASSERT(n == 1);
-        std::cout << f->get_name() << " " << mk_pp(args[0], m) << "\n";
         if (is_constructor(args[0])) 
             return to_app(args[0])->get_decl() != c;
         return false;
@@ -1083,6 +1082,14 @@ namespace datatype {
         return r;
     }
 
+    bool util::is_recursive_array(sort* a) {
+        array_util autil(m);
+        if (!autil.is_array(a))
+            return false;
+        a = autil.get_array_range_rec(a);                
+        return is_datatype(a) && is_recursive(a);
+    }
+
     bool util::is_enum_sort(sort* s) {
         if (!is_datatype(s)) {
             return false;
@@ -1244,6 +1251,9 @@ namespace datatype {
        defined together in the same mutually recursive definition.
     */
     bool util::are_siblings(sort * s1, sort * s2) {
+        array_util autil(m);
+        s1 = autil.get_array_range_rec(s1);                
+        s2 = autil.get_array_range_rec(s2);                
         if (!is_datatype(s1) || !is_datatype(s2)) {
             return s1 == s2;
         }

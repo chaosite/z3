@@ -63,7 +63,7 @@ struct pull_quant::imp {
             
             for (unsigned i = 0; i < num_children; i++) {
                 expr * child = children[i];
-                if (is_quantifier(child)) {
+                if (is_quantifier(child) && !is_lambda(child)) {
                     
                     if (!found_quantifier && (is_forall(child) || is_exists(child))) {
                         found_quantifier = true;
@@ -184,11 +184,11 @@ struct pull_quant::imp {
             // Remark: patterns are ignored.
             // See comment in reduce1_app
             result = m.mk_forall(var_sorts.size(),
-                                         var_sorts.data(),
-                                         var_names.data(),
-                                         nested_q->get_expr(),
-                                         std::min(q->get_weight(), nested_q->get_weight()),
-                                         q->get_qid());
+				 var_sorts.data(),
+				 var_names.data(),
+				 nested_q->get_expr(),
+				 std::min(q->get_weight(), nested_q->get_weight()),
+				 m.is_lambda_def(q) ? symbol("pulled-lambda") : q->get_qid());
         }
 
         void pull_quant1(quantifier * q, expr * new_expr, expr_ref & result) {
@@ -276,7 +276,7 @@ struct pull_quant::imp {
 
             if (is_exists(old_q)) {
                 result = m.mk_not(new_body);
-                result = m.mk_not(m.update_quantifier(old_q, exists_k, result));
+                result = m.mk_not(m.update_quantifier(old_q, forall_k, result));
                 if (m.proofs_enabled()) 
                     m.mk_rewrite(old_q, result);
                 return true;

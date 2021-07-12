@@ -87,6 +87,7 @@ zstring::zstring(char const* s) {
     SASSERT(well_formed());
 }
 
+
 bool zstring::uses_unicode() const {
     return gparams::get_value("unicode") != "false";
 }
@@ -234,11 +235,16 @@ zstring zstring::extract(unsigned offset, unsigned len) const {
     return result;
 }
 
+unsigned zstring::hash() const {
+    return unsigned_ptr_hash(m_buffer.data(), m_buffer.size(), 23);
+}
+
 zstring zstring::operator+(zstring const& other) const {
     zstring result(*this);
     result.m_buffer.append(other.m_buffer);
     return result;
 }
+
 
 bool zstring::operator==(const zstring& other) const {
     // two strings are equal iff they have the same length and characters
@@ -270,16 +276,10 @@ bool operator<(const zstring& lhs, const zstring& rhs) {
     for (unsigned i = 0; i < len; ++i) {
         unsigned Li = lhs[i];
         unsigned Ri = rhs[i];
-        if (Li < Ri) {
-            return true;
-        } 
-        else if (Li > Ri) {
-            return false;
-        } 
+        if (Li != Ri)
+            return Li < Ri;
     }
     // at this point, all compared characters are equal,
     // so decide based on the relative lengths
     return lhs.length() < rhs.length();
 }
-
-

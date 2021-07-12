@@ -1395,7 +1395,7 @@ namespace smt {
         SASSERT(get_bdata(v).is_enode());
         lbool val  = get_assignment(v);
         TRACE("propagate_bool_var_enode_bug", tout << "var: " << v << " #" << bool_var2expr(v)->get_id() << "\n";);
-        SASSERT(v < static_cast<int>(m_b_internalized_stack.size()));
+        SASSERT(v < m_b_internalized_stack.size());
         enode * n  = bool_var2enode(v);
 
         CTRACE("mk_bool_var", !n, tout << "No enode for " << v << "\n";);
@@ -1986,7 +1986,7 @@ namespace smt {
     void context::remove_lit_occs(clause const& cls, unsigned nbv) {
         if (!track_occs()) return;
         for (literal l : cls) {
-            if (l.var() < static_cast<int>(nbv)) 
+            if (l.var() < nbv) 
                 dec_ref(l);
         }
     }
@@ -2264,7 +2264,7 @@ namespace smt {
                     SASSERT(cls->get_num_atoms() == cls->get_num_literals());
                     for (unsigned j = 0; j < 2; j++) {
                         literal l           = cls->get_literal(j);
-                        if (l.var() < static_cast<int>(num_bool_vars)) {
+                        if (l.var() < num_bool_vars) {
                             // This boolean variable was not deleted during backtracking
                             //
                             // So, it is still a watch literal. I remove the watch, since
@@ -3081,7 +3081,7 @@ namespace smt {
                     literal l2 = *set_it;
                     if (l2 != l) {
                         b_justification js(l);
-                        TRACE("theory_case_split", tout << "case split literal "; l2.display(tout, m, m_bool_var2expr.data()); tout << std::endl;);
+                        TRACE("theory_case_split", tout << "case split literal "; smt::display(tout, l2, m, m_bool_var2expr.data()); tout << std::endl;);
                         if (l2 == true_literal || l2 == false_literal || l2 == null_literal) continue;
                         assign(~l2, js);
                         if (inconsistent()) {
@@ -4096,7 +4096,7 @@ namespace smt {
                 expr * * atoms         = m_conflict_resolution->get_lemma_atoms();
                 for (unsigned i = 0; i < num_lits; i++) {
                     literal l   = lits[i];
-                    if (l.var() >= static_cast<int>(num_bool_vars)) {
+                    if (l.var() >= num_bool_vars) {
                         // This boolean variable was deleted during backtracking, it need to be recreated.
                         // Remark: atom may be a negative literal (not a). Z3 creates Boolean variables for not-gates that
                         // are nested in terms. Example: let f be a uninterpreted function from Bool -> Int.
@@ -4188,7 +4188,7 @@ namespace smt {
                   for (unsigned i = 0; i < num_lits; i++) {
                       display_literal(tout, v[i]);
                       tout << "\n";
-                      v[i].display(tout, m, m_bool_var2expr.data());
+                      smt::display(tout, v[i], m, m_bool_var2expr.data());
                       tout << "\n\n";
                   }
                   tout << "\n";);
@@ -4582,31 +4582,8 @@ namespace smt {
     }
 
     void context::add_rec_funs_to_model() {
-        if (!m_model) return;
-        recfun::util u(m);
-        func_decl_ref_vector recfuns = u.get_rec_funs();
-        for (func_decl* f : recfuns) {
-            auto& def = u.get_def(f);
-            expr* rhs = def.get_rhs();
-            if (!rhs) continue;
-            if (f->get_arity() == 0) {
-                m_model->register_decl(f, rhs);
-                continue;
-            }			
-
-            func_interp* fi = alloc(func_interp, m, f->get_arity());
-            // reverse argument order so that variable 0 starts at the beginning.
-            expr_ref_vector subst(m);
-            for (unsigned i = 0; i < f->get_arity(); ++i) {
-                subst.push_back(m.mk_var(i, f->get_domain(i)));
-            }
-            var_subst sub(m, true);
-            expr_ref bodyr = sub(rhs, subst.size(), subst.data());
-
-            fi->set_else(bodyr);
-            m_model->register_decl(f, fi);
-        }
-        TRACE("model", tout << *m_model << "\n";);
+        if (m_model)
+            m_model->add_rec_funs();
     }
 
 };

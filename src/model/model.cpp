@@ -28,6 +28,7 @@ Revision History:
 #include "ast/rewriter/th_rewriter.h"
 #include "ast/array_decl_plugin.h"
 #include "ast/bv_decl_plugin.h"
+#include "ast/recfun_decl_plugin.h"
 #include "ast/well_sorted.h"
 #include "ast/used_symbols.h"
 #include "ast/for_each_expr.h"
@@ -413,7 +414,7 @@ struct model::top_sort : public ::top_sort<func_decl> {
     }
 };
 
-void model::compress() {
+void model::compress(bool force_inline) {
     if (m_cleaned) return;
 
     // stratify m_finterp and m_decls in a topological sort
@@ -427,7 +428,7 @@ void model::compress() {
         collect_deps(ts);
         ts.topological_sort();
         for (func_decl * f : ts.top_sorted()) {
-            cleanup_interp(ts, f);
+            cleanup_interp(ts, f, force_inline);
         }
 
         func_decl_set removed;
@@ -521,11 +522,11 @@ model::func_decl_set* model::collect_deps(top_sort& ts, func_interp * fi) {
    \brief Inline interpretations of skolem functions
 */
 
-void model::cleanup_interp(top_sort& ts, func_decl* f) {
+void model::cleanup_interp(top_sort& ts, func_decl* f, bool force_inline) {
     unsigned pid = ts.partition_id(f);
     expr * e1 = get_const_interp(f);
     if (e1) {
-        expr_ref e2 = cleanup_expr(ts, e1, pid);
+        expr_ref e2 = cleanup_expr(ts, e1, pid, force_inline);
         if (e2 != e1) 
             register_decl(f, e2);
         return;
@@ -533,11 +534,11 @@ void model::cleanup_interp(top_sort& ts, func_decl* f) {
     func_interp* fi = get_func_interp(f);
     if (fi) {
         e1 = fi->get_else();
-        expr_ref e2 = cleanup_expr(ts, e1, pid);
+        expr_ref e2 = cleanup_expr(ts, e1, pid, force_inline);
         if (e1 != e2) 
             fi->set_else(e2);
         for (auto& fe : *fi) {
-            e2 = cleanup_expr(ts, fe->get_result(), pid);
+            e2 = cleanup_expr(ts, fe->get_result(), pid, force_inline);
             if (e2 != fe->get_result()) {
                 fi->insert_entry(fe->get_args(), e2);
             }
@@ -571,21 +572,26 @@ void model::collect_occs(top_sort& ts, expr* e) {
     for_each_ast(collector, e, true);
 }
 
-bool model::can_inline_def(top_sort& ts, func_decl* f) {
+bool model::can_inline_def(top_sort& ts, func_decl* f, bool force_inline) {
     if (ts.occur_count(f) <= 1) return true;
     func_interp* fi = get_func_interp(f);
-    if (!fi) return false;
-    if (fi->get_else() == nullptr) return false;
-    if (m_inline) return true;
+    if (!fi) 
+        return false;
+    if (fi->get_else() == nullptr) 
+        return false;
+    if (m_inline) 
+        return true;
     expr* e = fi->get_else();
     obj_hashtable<expr> subs;
     ptr_buffer<expr> todo;
     todo.push_back(e);
     while (!todo.empty()) {
-        if (fi->num_entries() + subs.size() > 8) return false;
+        if (!force_inline && fi->num_entries() + subs.size() > 8) 
+            return false;
         expr* e = todo.back();
         todo.pop_back();
-        if (subs.contains(e)) continue;
+        if (subs.contains(e)) 
+            continue;
         subs.insert(e);
         if (is_app(e)) {
             for (expr* arg : *to_app(e)) {
@@ -600,7 +606,7 @@ bool model::can_inline_def(top_sort& ts, func_decl* f) {
 }
 
 
-expr_ref model::cleanup_expr(top_sort& ts, expr* e, unsigned current_partition) {
+expr_ref model::cleanup_expr(top_sort& ts, expr* e, unsigned current_partition, bool force_inline) {
     if (!e) return expr_ref(nullptr, m);
 
     TRACE("model", tout << "cleaning up:\n" << mk_pp(e, m) << "\n";);
@@ -644,7 +650,7 @@ expr_ref model::cleanup_expr(top_sort& ts, expr* e, unsigned current_partition) 
             if (autil.is_as_array(a)) {
                 func_decl* f = autil.get_as_array_func_decl(a);
                 // only expand auxiliary definitions that occur once.
-                if (can_inline_def(ts, f)) {
+                if (can_inline_def(ts, f, force_inline)) {
                     fi = get_func_interp(f);
                     if (fi) {
                         new_t = fi->get_array_interp(f);
@@ -656,7 +662,7 @@ expr_ref model::cleanup_expr(top_sort& ts, expr* e, unsigned current_partition) 
             if (new_t) {
                 // noop
             }
-            else if (f->is_skolem() && can_inline_def(ts, f) && (fi = get_func_interp(f)) && 
+            else if (f->is_skolem() && can_inline_def(ts, f, force_inline) && (fi = get_func_interp(f)) && 
                      fi->get_interp() && (!ts.partition_ids().find(f, pid) || pid != current_partition)) {
                 var_subst vs(m, false);
                 new_t = vs(fi->get_interp(), args.size(), args.data());
@@ -715,15 +721,15 @@ expr_ref model::unfold_as_array(expr* e) {
 }
 
 
-expr_ref model::get_inlined_const_interp(func_decl* f) {
+expr_ref model::get_inlined_const_interp(func_decl* f, bool force_inline) {
     expr* v = get_const_interp(f);
     if (!v) return expr_ref(nullptr, m);
     top_sort st(m);
     expr_ref result1(v, m);
-    expr_ref result2 = cleanup_expr(st, v, UINT_MAX);
+    expr_ref result2 = cleanup_expr(st, v, UINT_MAX, force_inline);
     while (result1 != result2) {
         result1 = result2;
-        result2 = cleanup_expr(st, result1, UINT_MAX);
+        result2 = cleanup_expr(st, result1, UINT_MAX, force_inline);
     }
     return result2;
 }
@@ -772,3 +778,32 @@ void model::reset_eval_cache() {
     m_mev.reset();
 }
 
+void model::add_rec_funs() {
+    recfun::util u(m);
+    func_decl_ref_vector recfuns = u.get_rec_funs();
+    for (func_decl* f : recfuns) {
+        auto& def = u.get_def(f);
+        expr* rhs = def.get_rhs();
+        if (!rhs) 
+            continue;
+        if (has_interpretation(f))
+            continue;
+        if (f->get_arity() == 0) {
+            register_decl(f, rhs);
+            continue;
+        }
+                
+        func_interp* fi = alloc(func_interp, m, f->get_arity());
+        // reverse argument order so that variable 0 starts at the beginning.
+        expr_ref_vector subst(m);
+        for (unsigned i = 0; i < f->get_arity(); ++i) {
+            subst.push_back(m.mk_var(i, f->get_domain(i)));
+        }
+        var_subst sub(m, true);
+        expr_ref bodyr = sub(rhs, subst);
+        
+        fi->set_else(bodyr);
+        register_decl(f, fi);
+    }
+    TRACE("model", tout << *this << "\n";);
+}

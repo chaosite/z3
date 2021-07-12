@@ -79,6 +79,7 @@ enum seq_op_kind {
     OP_STRING_CONST,
     OP_STRING_ITOS,
     OP_STRING_STOI,
+    OP_STRING_UBVTOS,
     OP_STRING_LT,
     OP_STRING_LE,
     OP_STRING_IS_DIGIT,
@@ -149,6 +150,7 @@ class seq_decl_plugin : public decl_plugin {
     func_decl* mk_assoc_fun(decl_kind k, unsigned arity, sort* const* domain, sort* range, decl_kind k_string, decl_kind k_seq);
     func_decl* mk_left_assoc_fun(decl_kind k, unsigned arity, sort* const* domain, sort* range, decl_kind k_string, decl_kind k_seq);
     func_decl* mk_assoc_fun(decl_kind k, unsigned arity, sort* const* domain, sort* range, decl_kind k_string, decl_kind k_seq, bool is_right);
+    func_decl* mk_ubv2s(unsigned arity, sort* const* domain);
 
 
     void init();
@@ -160,7 +162,6 @@ class seq_decl_plugin : public decl_plugin {
 public:
     seq_decl_plugin();
 
-    ~seq_decl_plugin() override {}
     void finalize() override;
 
     bool unicode() const { return get_char_plugin().unicode(); }
@@ -186,12 +187,11 @@ public:
 
     expr * get_some_value(sort * s) override;
 
-    bool is_char(ast* a) const { return a == m_char; }
+    bool is_char(sort* a) const { return a == m_char; }
 
     unsigned max_char() const { return get_char_plugin().max_char(); }
     unsigned num_bits() const { return get_char_plugin().num_bits(); }
 
-    app* mk_string(symbol const& s);
     app* mk_string(zstring const& s);
     app* mk_char(unsigned ch);
 
@@ -224,7 +224,8 @@ public:
     sort* mk_string_sort() const { return seq.string_sort(); }
 
     bool is_char(sort* s) const { return seq.is_char(s); }
-    bool is_string(sort* s) const { return is_seq(s) && seq.is_char(s->get_parameter(0).get_ast()); }
+    bool is_char(expr* e) const { return is_char(e->get_sort()); }
+    bool is_string(sort* s) const { return is_seq(s) && seq.is_char(to_sort(s->get_parameter(0).get_ast())); }
     bool is_seq(sort* s) const { return is_sort_of(s, m_fid, SEQ_SORT); }
     bool is_re(sort* s) const { return is_sort_of(s, m_fid, RE_SORT); }
     bool is_re(sort* s, sort*& seq) const { return is_sort_of(s, m_fid, RE_SORT)  && (seq = to_sort(s->get_parameter(0).get_ast()), true); }
@@ -232,7 +233,6 @@ public:
     bool is_seq(sort* s, sort*& seq) const { return is_seq(s) && (seq = to_sort(s->get_parameter(0).get_ast()), true); }
     bool is_re(expr* e) const { return is_re(e->get_sort()); }
     bool is_re(expr* e, sort*& seq) const { return is_re(e->get_sort(), seq); }
-    bool is_char(expr* e) const { return is_char(e->get_sort()); }
     bool is_const_char(expr* e, unsigned& c) const;
     bool is_const_char(expr* e) const { unsigned c; return is_const_char(e, c); }
     bool is_char_le(expr const* e) const;
@@ -262,9 +262,6 @@ public:
         ast_manager& m;
         family_id    m_fid;
 
-        app* mk_string(char const* s) { return mk_string(symbol(s)); }
-        app* mk_string(std::string const& s) { return mk_string(symbol(s.c_str())); }
-
 
     public:
         str(seq_util& u): u(u), m(u.m), m_fid(u.m_fid) {}
@@ -273,7 +270,6 @@ public:
         sort* mk_string_sort() const { return m.mk_sort(m_fid, _STRING_SORT, 0, nullptr); }
         app* mk_empty(sort* s) const { return m.mk_const(m.mk_func_decl(m_fid, OP_SEQ_EMPTY, 0, nullptr, 0, (expr*const*)nullptr, s)); }
         app* mk_string(zstring const& s) const;
-        app* mk_string(symbol const& s) const { return u.seq.mk_string(s); }
         app* mk_char(unsigned ch) const;
         app* mk_concat(expr* a, expr* b) const { expr* es[2] = { a, b }; return m.mk_app(m_fid, OP_SEQ_CONCAT, 2, es); }
         app* mk_concat(expr* a, expr* b, expr* c) const { return mk_concat(a, mk_concat(b, c)); }
@@ -300,6 +296,7 @@ public:
         app* mk_char_bit(expr* e, unsigned i);
         app* mk_itos(expr* i) const { return m.mk_app(m_fid, OP_STRING_ITOS, 1, &i); }
         app* mk_stoi(expr* s) const { return m.mk_app(m_fid, OP_STRING_STOI, 1, &s); }
+        app* mk_ubv2s(expr* b) const { return m.mk_app(m_fid, OP_STRING_UBVTOS, 1, &b); }
         app* mk_is_empty(expr* s) const;
         app* mk_lex_lt(expr* a, expr* b) const { expr* es[2] = { a, b }; return m.mk_app(m_fid, OP_STRING_LT, 2, es); }
         app* mk_lex_le(expr* a, expr* b) const { expr* es[2] = { a, b }; return m.mk_app(m_fid, OP_STRING_LE, 2, es); }
@@ -313,14 +310,12 @@ public:
         bool is_skolem(func_decl const* f)      const { return is_decl_of(f, m_fid, _OP_SEQ_SKOLEM); }
 
         bool is_string(expr const * n) const { return is_app_of(n, m_fid, OP_STRING_CONST); }
-        bool is_string(expr const* n, symbol& s) const {
-            return is_string(n) && (s = to_app(n)->get_decl()->get_parameter(0).get_symbol(), true);
-        }
         bool is_string(func_decl const* f) const { return is_decl_of(f, m_fid, OP_STRING_CONST); }
         bool is_string(expr const* n, zstring& s) const;
         bool is_string(func_decl const* f, zstring& s) const;
-        bool is_empty(expr const* n) const { symbol s;
-            return is_app_of(n, m_fid, OP_SEQ_EMPTY) || (is_string(n, s) && !s.is_numerical() && *s.bare_str() == 0);
+        bool is_empty(expr const* n) const {
+            zstring s;
+            return is_app_of(n, m_fid, OP_SEQ_EMPTY) || (is_string(n, s) && s.empty());
         }
         bool is_concat(expr const* n)   const { return is_app_of(n, m_fid, OP_SEQ_CONCAT); }
         bool is_length(expr const* n)   const { return is_app_of(n, m_fid, OP_SEQ_LENGTH); }
@@ -340,6 +335,7 @@ public:
         bool is_suffix(expr const* n)   const { return is_app_of(n, m_fid, OP_SEQ_SUFFIX); }
         bool is_itos(expr const* n)     const { return is_app_of(n, m_fid, OP_STRING_ITOS); }
         bool is_stoi(expr const* n)     const { return is_app_of(n, m_fid, OP_STRING_STOI); }
+        bool is_ubv2s(expr const* n)    const { return is_app_of(n, m_fid, OP_STRING_UBVTOS); }
         bool is_in_re(expr const* n)    const { return is_app_of(n, m_fid, OP_SEQ_IN_RE); }
         bool is_unit(expr const* n)     const { return is_app_of(n, m_fid, OP_SEQ_UNIT); }
         bool is_lt(expr const* n)       const { return is_app_of(n, m_fid, OP_STRING_LT); }
@@ -377,6 +373,7 @@ public:
         MATCH_BINARY(is_le);
         MATCH_UNARY(is_itos);
         MATCH_UNARY(is_stoi);
+        MATCH_UNARY(is_ubv2s);
         MATCH_UNARY(is_is_digit);
         MATCH_UNARY(is_from_code);
         MATCH_UNARY(is_to_code);
@@ -581,8 +578,6 @@ public:
         str(*this),
         re(*this) {
     }
-
-    ~seq_util() {}
 
     family_id get_family_id() const { return m_fid; }
 };

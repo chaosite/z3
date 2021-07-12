@@ -89,7 +89,7 @@ namespace smt {
     }
 
     std::ostream& context::display_literal(std::ostream & out, literal l) const {
-        l.display_compact(out, m_bool_var2expr.data()); return out;
+        smt::display_compact(out, l, m_bool_var2expr.data()); return out;
     }
 
     std::ostream& context::display_literals(std::ostream & out, unsigned num_lits, literal const * lits) const {
@@ -120,7 +120,7 @@ namespace smt {
     }
 
     void context::display_literal_info(std::ostream & out, literal l) const {
-        l.display_compact(out, m_bool_var2expr.data());
+        smt::display_compact(out, l, m_bool_var2expr.data());
         display_literal_smt2(out, l);
         out << "relevant: " << is_relevant(bool_var2expr(l.var())) << ", val: " << get_assignment(l) << "\n";
     }
@@ -296,7 +296,7 @@ namespace smt {
 
     void context::display_hot_bool_vars(std::ostream & out) const {
         out << "hot bool vars:\n";
-        int num = get_num_bool_vars();
+        unsigned num = get_num_bool_vars();
         for (bool_var v = 0; v < num; v++) {
             double val = get_activity(v)/m_bvar_inc;
             if (val > 10.00) {
@@ -608,14 +608,14 @@ namespace smt {
             clause * cls = j.get_clause();
             out << "clause ";
             if (cls) out << literal_vector(cls->get_num_literals(), cls->begin());
-            if (cls) display_literals_smt2(out << "\n", cls->get_num_literals(), cls->begin());
+            // if (cls) display_literals_smt2(out << "\n", cls->get_num_literals(), cls->begin());
             break;
         }
         case b_justification::JUSTIFICATION: {
             literal_vector lits;
             const_cast<conflict_resolution&>(*m_conflict_resolution).justification2literals(j.get_justification(), lits);
             out << "justification " << j.get_justification()->get_from_theory() << ": ";
-            display_literals_smt2(out, lits);
+            // display_literals_smt2(out, lits);
             break;
         }
         default:
