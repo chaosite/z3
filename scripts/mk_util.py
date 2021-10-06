@@ -1739,7 +1739,7 @@ class DotNetDLLComponent(Component):
             dotnetCmdLine.extend(['Release'])
 
         path = os.path.join(os.path.abspath(BUILD_DIR), ".")
-        dotnetCmdLine.extend(['-o', path])
+        dotnetCmdLine.extend(['-o', "\"%s\"" % path])
             
         MakeRuleCmd.write_cmd(out, ' '.join(dotnetCmdLine))
         out.write('\n')        

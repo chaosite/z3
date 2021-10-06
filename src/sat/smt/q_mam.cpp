@@ -414,7 +414,7 @@ namespace q {
         enode_vector               m_candidates;
 #ifdef Z3DEBUG
         egraph *                   m_egraph;
-        ptr_vector<app>            m_patterns;
+        svector<std::pair<quantifier*, app*>>            m_patterns;
 #endif
 #ifdef _PROFILE_MAM
         stopwatch                  m_watch;
@@ -568,7 +568,7 @@ namespace q {
             m_egraph = ctx;
         }
 
-        ptr_vector<app> & get_patterns() {
+        svector<std::pair<quantifier*, app*>> & get_patterns() {
             return m_patterns;
         }
 #endif
@@ -578,8 +578,8 @@ namespace q {
             if (m_egraph) {
                 ast_manager & m = m_egraph->get_manager();
                 out << "patterns:\n";
-                for (app* a : m_patterns) 
-                    out << mk_pp(a, m) << "\n";
+                for (auto [q, a] : m_patterns) 
+                    out << mk_pp(q, m) << " " << mk_pp(a, m) << "\n";
             }
 #endif
             out << "function: " << m_root_lbl->get_name();
@@ -1987,33 +1987,36 @@ namespace q {
                 m_backtrack_stack.resize(t->get_num_choices());
         }
 
+        struct scoped_unmark {
+            code_tree* t;
+            scoped_unmark(code_tree* t) : t(t) {}
+            ~scoped_unmark() {
+                for (enode* app : t->get_candidates()) 
+                    if (app->is_marked1())
+                        app->unmark1();                
+            }
+        };
+
         void execute(code_tree * t) {
             TRACE("trigger_bug", tout << "execute for code tree:\n"; t->display(tout););
             init(t);
-            if (t->filter_candidates()) {
-                for (unsigned i = 0; i < t->get_candidates().size(); ++i) {
+            if (t->filter_candidates()) {                
+                scoped_unmark _unmark(t);
+                for (unsigned i = 0; i < t->get_candidates().size() && !ctx.resource_limits_exceeded(); ++i) {
                     enode* app = t->get_candidates()[i];
                     TRACE("trigger_bug", tout << "candidate\n" << mk_ismt2_pp(app->get_expr(), m) << "\n";);
                     if (!app->is_marked1() && app->is_cgr()) {
-                        if (ctx.resource_limits_exceeded() || !execute_core(t, app))
-                            return;
+                        execute_core(t, app);                       
                         app->mark1();
                     }
                 }
-                for (enode* app : t->get_candidates()) {
-                    if (app->is_marked1())
-                        app->unmark1();
-                }
             }
             else {
-                for (unsigned i = 0; i < t->get_candidates().size(); ++i) {
+                for (unsigned i = 0; i < t->get_candidates().size() && !ctx.resource_limits_exceeded(); ++i) {
                     enode* app = t->get_candidates()[i];
                     TRACE("trigger_bug", tout << "candidate\n" << mk_ismt2_pp(app->get_expr(), m) << "\n";);
-                    if (app->is_cgr()) {
-                        TRACE("trigger_bug", tout << "is_cgr\n";);
-                        if (ctx.resource_limits_exceeded() || !execute_core(t, app))
-                            return;
-                    }
+                    if (app->is_cgr()) 
+                        execute_core(t, app);                                              
                 }
             }
         }
@@ -2070,7 +2073,6 @@ namespace q {
         enode * n = m_registers[j2->m_reg]->get_root();
         if (n->num_parents() == 0)
             return nullptr;
-        unsigned num_args = n->num_args();
         enode_vector * v  = mk_enode_vector();
         for (enode* p : euf::enode_parents(n)) {
             if (p->get_decl() == j2->m_decl &&
@@ -2082,11 +2084,9 @@ namespace q {
                 p = p->get_root();
                 for (enode* p2 : euf::enode_parents(p)) {
                     if (p2->get_decl() == f &&
-                        num_args == n->num_args() && 
-                        num_args == p2->num_args() &&
                         ctx.is_relevant(p2) &&
                         p2->is_cgr() &&
-                        i < num_args && 
+                        i < p2->num_args() && 
                         p2->get_arg(i)->get_root() == p) {
                         v->push_back(p2);
                     }
@@ -2862,12 +2862,11 @@ namespace q {
                 // The E-matching engine that was built when all + and * applications were binary.
                 // We ignore the pattern if it does not have the expected number of arguments.
                 // This is not the ideal solution, but it avoids possible crashes.
-                if (tree->expected_num_args() == p->get_num_args()) {
+                if (tree->expected_num_args() == p->get_num_args()) 
                     m_compiler.insert(tree, qa, mp, first_idx, false);
-                }
             }
-            DEBUG_CODE(m_trees[lbl_id]->get_patterns().push_back(mp);
-                       ctx.push(push_back_trail<app*, false>(m_trees[lbl_id]->get_patterns())););
+            DEBUG_CODE(m_trees[lbl_id]->get_patterns().push_back(std::make_pair(qa, mp));
+                       ctx.push(push_back_trail<std::pair<quantifier*,app*>, false>(m_trees[lbl_id]->get_patterns())););
             TRACE("trigger_bug", tout << "after add_pattern, first_idx: " << first_idx << "\n"; m_trees[lbl_id]->display(tout););
         }
 
@@ -3334,6 +3333,8 @@ namespace q {
         }
 
         void update_vars(unsigned short var_id, path * p, quantifier * qa, app * mp) {
+            if (var_id >= qa->get_num_decls())
+                return;
             paths & var_paths = m_var_paths[var_id];
             bool found = false;
             for (path* curr_path : var_paths) {
@@ -3345,8 +3346,8 @@ namespace q {
                 update_plbls(lbl2);
                 update_pp(m_lbl_hasher(lbl1), m_lbl_hasher(lbl2), curr_path, p, qa, mp);
             }
-            if (!found)
-                var_paths.push_back(p);
+            if (!found) 
+                var_paths.push_back(p);            
         }
 
         enode * get_ground_arg(app * pat, quantifier * qa, unsigned & pos) {
@@ -3414,7 +3415,7 @@ namespace q {
             unsigned num_vars = qa->get_num_decls();
             if (num_vars >= m_var_paths.size())
                 m_var_paths.resize(num_vars+1);
-            for (unsigned i = 0; i < num_vars; i++)
+            for (unsigned i = 0; i <= num_vars; i++)
                 m_var_paths[i].reset();
             m_tmp_region.reset();
             // Given a multi-pattern (p_1, ..., p_n)
@@ -3559,12 +3560,14 @@ namespace q {
                                     //    For every application f(x_1, ..., x_n) of a function symbol f, n = f->get_arity().
                                     // Starting at Z3 3.0, this is only true if !f->is_flat_associative().
                                     // Thus, we need the extra checks.
-                                    (!is_flat_assoc || (curr_tree->m_arg_idx < curr_parent->num_args() &&
-                                                        curr_tree->m_ground_arg_idx < curr_parent->num_args()))) {
+                                    curr_tree->m_arg_idx < curr_parent->num_args() && 
+                                    (!is_flat_assoc || curr_tree->m_ground_arg_idx < curr_parent->num_args())) {
                                     enode * curr_parent_child = curr_parent->get_arg(curr_tree->m_arg_idx)->get_root();
                                     if (// Filter 1. the curr_child is equal to child of the current parent.
                                         curr_child == curr_parent_child &&
-                                        // Filter 2.
+                                        // Filter 2. m_ground_arg_idx is a valid argument
+                                        curr_tree->m_ground_arg_idx < curr_parent->num_args() && 
+                                        // Filter 3.
                                         (
                                          // curr_tree has no support for the filter based on a ground argument.
                                          curr_tree->m_ground_arg == nullptr ||
@@ -3746,7 +3749,7 @@ namespace q {
             // However, the simplifier may turn a non-ground pattern into a ground one.
             // So, we should check it again here.
             for (expr* arg : *mp)
-                if (is_ground(arg))
+                if (is_ground(arg) || has_quantifiers(arg))
                     return; // ignore multi-pattern containing ground pattern.
             update_filters(qa, mp);
             m_new_patterns.push_back(qp_pair(qa, mp));

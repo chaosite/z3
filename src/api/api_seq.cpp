@@ -79,6 +79,16 @@ extern "C" {
         Z3_CATCH_RETURN(nullptr);
     }
 
+     Z3_sort Z3_API Z3_mk_char_sort(Z3_context c) {
+        Z3_TRY;
+        LOG_Z3_mk_char_sort(c);
+        RESET_ERROR_CODE();
+        sort* ty = mk_c(c)->sutil().mk_char_sort();
+        mk_c(c)->save_ast_trail(ty);
+        RETURN_Z3(of_sort(ty));
+        Z3_CATCH_RETURN(nullptr);
+    }
+
     bool Z3_API Z3_is_seq_sort(Z3_context c, Z3_sort s) {
         Z3_TRY;
         LOG_Z3_is_seq_sort(c, s);
@@ -120,6 +130,15 @@ extern "C" {
         RETURN_Z3(of_sort(r));
         Z3_CATCH_RETURN(nullptr);
     }
+
+    bool Z3_API Z3_is_char_sort(Z3_context c, Z3_sort s) {
+        Z3_TRY;
+        LOG_Z3_is_char_sort(c, s);
+        RESET_ERROR_CODE();
+        return mk_c(c)->sutil().is_char(to_sort(s));
+        Z3_CATCH_RETURN(false);
+    }
+
 
     bool Z3_API Z3_is_string_sort(Z3_context c, Z3_sort s) {
         Z3_TRY;
@@ -168,14 +187,18 @@ extern "C" {
         svector<char> buff;
         for (unsigned i = 0; i < str.length(); ++i) {
             unsigned ch = str[i];
-            if (ch >= 256) {
+            if (ch <= 32 || ch >= 127) {
                 buff.reset();
                 buffer.push_back('\\');
-                buffer.push_back('\\');  // possibly replace by native non-escaped version?
+//                buffer.push_back('\\');  // possibly replace by native non-escaped version?
                 buffer.push_back('u');
                 buffer.push_back('{');
                 while (ch > 0) {
-                    buff.push_back('0' + (ch & 0xF));
+                    unsigned d = ch & 0xF;
+                    if (d < 10)
+                        buff.push_back('0' + d);
+                    else
+                        buff.push_back('a' + (d - 10));
                     ch /= 16;
                 }
                 for (unsigned j = buff.size(); j-- > 0; ) {
@@ -225,6 +248,8 @@ extern "C" {
 
     MK_UNARY(Z3_mk_int_to_str, mk_c(c)->get_seq_fid(), OP_STRING_ITOS, SKIP);
     MK_UNARY(Z3_mk_str_to_int, mk_c(c)->get_seq_fid(), OP_STRING_STOI, SKIP);
+    MK_UNARY(Z3_mk_ubv_to_str, mk_c(c)->get_seq_fid(), OP_STRING_UBVTOS, SKIP);
+    MK_UNARY(Z3_mk_sbv_to_str, mk_c(c)->get_seq_fid(), OP_STRING_SBVTOS, SKIP);
 
 
     Z3_ast Z3_API Z3_mk_re_loop(Z3_context c, Z3_ast r, unsigned lo, unsigned hi) {
@@ -245,10 +270,16 @@ extern "C" {
     MK_NARY(Z3_mk_re_intersect, mk_c(c)->get_seq_fid(), OP_RE_INTERSECT, SKIP);
     MK_NARY(Z3_mk_re_concat, mk_c(c)->get_seq_fid(), OP_RE_CONCAT, SKIP);
     MK_BINARY(Z3_mk_re_range, mk_c(c)->get_seq_fid(), OP_RE_RANGE, SKIP);
-
+  
+    MK_SORTED(Z3_mk_re_allchar, mk_c(c)->sutil().re.mk_full_char);
     MK_SORTED(Z3_mk_re_empty, mk_c(c)->sutil().re.mk_empty);
     MK_SORTED(Z3_mk_re_full, mk_c(c)->sutil().re.mk_full_seq);
 
+    MK_BINARY(Z3_mk_char_le, mk_c(c)->get_char_fid(), OP_CHAR_LE, SKIP);
+    MK_UNARY(Z3_mk_char_to_int, mk_c(c)->get_char_fid(), OP_CHAR_TO_INT, SKIP);
+    MK_UNARY(Z3_mk_char_to_bv, mk_c(c)->get_char_fid(), OP_CHAR_TO_BV, SKIP);
+    MK_UNARY(Z3_mk_char_from_bv, mk_c(c)->get_char_fid(), OP_CHAR_FROM_BV, SKIP);
+    MK_UNARY(Z3_mk_char_is_digit, mk_c(c)->get_char_fid(), OP_CHAR_IS_DIGIT, SKIP);
 
 
 };

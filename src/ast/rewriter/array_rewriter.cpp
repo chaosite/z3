@@ -31,7 +31,7 @@ void array_rewriter::updt_params(params_ref const & _p) {
     m_expand_store_eq = p.expand_store_eq();
     m_expand_nested_stores = p.expand_nested_stores();
     m_blast_select_store = p.blast_select_store();
-    m_expand_select_ite = false;
+    m_expand_select_ite = p.expand_select_ite();
 }
 
 void array_rewriter::get_param_descrs(param_descrs & r) {
@@ -226,8 +226,7 @@ br_status array_rewriter::mk_select_core(unsigned num_args, expr * const * args,
         result = subst(q->get_expr(), _args.size(), _args.data());
         inv_var_shifter invsh(m());
         invsh(result, _args.size(), result);
-        return BR_REWRITE_FULL;
-        
+        return BR_REWRITE_FULL;        
     }
 
     if (m_util.is_map(args[0])) {
@@ -248,7 +247,6 @@ br_status array_rewriter::mk_select_core(unsigned num_args, expr * const * args,
         // select(as-array[f], I) --> f(I)
         func_decl * f = m_util.get_as_array_func_decl(to_app(args[0]));
         result = m().mk_app(f, num_args - 1, args + 1);
-        TRACE("array", tout << mk_pp(args[0], m()) << " " << result << "\n";);
         return BR_REWRITE1;
     }
 

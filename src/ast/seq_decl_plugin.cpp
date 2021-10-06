@@ -350,7 +350,7 @@ func_decl* seq_decl_plugin::mk_left_assoc_fun(decl_kind k, unsigned arity, sort*
     return mk_assoc_fun(k, arity, domain, range, k_seq, k_string, false);
 }
 
-func_decl* seq_decl_plugin::mk_ubv2s(unsigned arity, sort* const* domain) {
+func_decl* seq_decl_plugin::mk_ubv2s(unsigned arity, sort* const* domain) const {
     ast_manager& m = *m_manager;
     if (arity != 1)
         m.raise_exception("Invalid str.from_ubv expects one bit-vector argument");
@@ -359,6 +359,17 @@ func_decl* seq_decl_plugin::mk_ubv2s(unsigned arity, sort* const* domain) {
         m.raise_exception("Invalid str.from_ubv expects one bit-vector argument");
     sort* rng = m_string;
     return m.mk_func_decl(symbol("str.from_ubv"), arity, domain, rng, func_decl_info(m_family_id, OP_STRING_UBVTOS));    
+}
+
+func_decl* seq_decl_plugin::mk_sbv2s(unsigned arity, sort* const* domain) const {
+    ast_manager &m = *m_manager;
+    if (arity != 1)
+        m.raise_exception("Invalid str.from_sbv expects one bit-vector argument");
+    bv_util bv(m);
+    if (!bv.is_bv_sort(domain[0]))
+        m.raise_exception("Invalid str.from_sbv expects one bit-vector argument");
+    sort *rng = m_string;
+    return m.mk_func_decl(symbol("str.from_sbv"), arity, domain, rng, func_decl_info(m_family_id, OP_STRING_SBVTOS));
 }
 
 func_decl* seq_decl_plugin::mk_assoc_fun(decl_kind k, unsigned arity, sort* const* domain, sort* range, decl_kind k_seq, decl_kind k_string, bool is_right) {
@@ -376,7 +387,7 @@ func_decl* seq_decl_plugin::mk_assoc_fun(decl_kind k, unsigned arity, sort* cons
 }
 
 
-func_decl * seq_decl_plugin::mk_func_decl(decl_kind k, unsigned num_parameters, parameter const * parameters,
+func_decl* seq_decl_plugin::mk_func_decl(decl_kind k, unsigned num_parameters, parameter const * parameters,
                                           unsigned arity, sort * const * domain, sort * range) {
     init();
     m_has_seq = true;
@@ -416,8 +427,12 @@ func_decl * seq_decl_plugin::mk_func_decl(decl_kind k, unsigned num_parameters, 
     case OP_STRING_FROM_CODE:
         match(*m_sigs[k], arity, domain, range, rng);
         return m.mk_func_decl(m_sigs[k]->m_name, arity, domain, rng, func_decl_info(m_family_id, k));
+
     case OP_STRING_UBVTOS:
-        NOT_IMPLEMENTED_YET();
+        return mk_ubv2s(arity, domain);
+
+    case OP_STRING_SBVTOS:
+        return mk_sbv2s(arity, domain);
 
     case _OP_REGEXP_FULL_CHAR:
         m_has_re = true;
@@ -627,6 +642,7 @@ void seq_decl_plugin::get_op_names(svector<builtin_name> & op_names, symbol cons
     op_names.push_back(builtin_name("re.nostr",  _OP_REGEXP_EMPTY));
     op_names.push_back(builtin_name("re.complement", OP_RE_COMPLEMENT));
     op_names.push_back(builtin_name("str.from_ubv", OP_STRING_UBVTOS));
+    op_names.push_back(builtin_name("str.from_sbv", OP_STRING_SBVTOS));
 }
 
 void seq_decl_plugin::get_sort_names(svector<builtin_name> & sort_names, symbol const & logic) {
@@ -782,6 +798,15 @@ bool seq_util::is_char2int(expr const* e) const {
     return ch.is_to_int(e);
 }
 
+bool seq_util::is_bv2char(expr const* e) const {
+    return ch.is_bv2char(e);
+}
+
+bool seq_util::is_char2bv(expr const* e) const {
+    return ch.is_char2bv(e);
+}
+
+
 app* seq_util::mk_char(unsigned ch) const {
     return seq.mk_char(ch);
 }
@@ -895,7 +920,7 @@ unsigned seq_util::str::max_length(expr* s) const {
             return UINT_MAX;
     };
     while (is_concat(s, s1, s2)) {
-        result = u.max_plus(get_length(s), result);
+        result = u.max_plus(get_length(s1), result);
         s = s2;
     }
     result = u.max_plus(get_length(s), result);
@@ -1042,6 +1067,7 @@ app* seq_util::rex::mk_epsilon(sort* seq_sort) {
 */
 std::ostream& seq_util::rex::pp::compact_helper_seq(std::ostream& out, expr* s) const {
     SASSERT(re.u.is_seq(s));
+    zstring z;
     if (re.u.str.is_empty(s))
         out << "()";
     else if (re.u.str.is_unit(s))
@@ -1051,6 +1077,10 @@ std::ostream& seq_util::rex::pp::compact_helper_seq(std::ostream& out, expr* s) 
         re.u.str.get_concat(s, es);
         for (expr* e : es)
             compact_helper_seq(out, e);
+    }
+    else if (re.u.str.is_string(s, z)) {
+        for (unsigned i = 0; i < z.length(); i++)
+            out << (char)z[i];
     }
     //using braces to indicate 'full' output
     //for example an uninterpreted constant X will be printed as {X}
@@ -1084,7 +1114,7 @@ bool seq_util::rex::pp::can_skip_parenth(expr* r) const {
 std::ostream& seq_util::rex::pp::seq_unit(std::ostream& out, expr* s) const {
     expr* e;
     unsigned n = 0;
-    if (re.u.str.is_unit(s, e) && re.u.is_const_char(e, n)) {
+    if ((re.u.str.is_unit(s, e) && re.u.is_const_char(e, n)) || re.u.is_const_char(s, n)) {
         char c = (char)n;
         if (c == '\n')
             out << "\\n";
@@ -1132,7 +1162,11 @@ std::ostream& seq_util::rex::pp::seq_unit(std::ostream& out, expr* s) const {
 std::ostream& seq_util::rex::pp::display(std::ostream& out) const {
     expr* r1 = nullptr, * r2 = nullptr, * s = nullptr, * s2 = nullptr;
     unsigned lo = 0, hi = 0;
-    if (re.is_full_char(e))
+    if (re.u.is_char(e))
+        return seq_unit(out, e);
+    else if (re.u.is_seq(e))
+        return compact_helper_seq(out, e);
+    else if (re.is_full_char(e))
         return out << ".";
     else if (re.is_full_seq(e))
         return out << ".*";
@@ -1147,9 +1181,9 @@ std::ostream& seq_util::rex::pp::display(std::ostream& out) const {
     else if (re.is_concat(e, r1, r2)) 
         return out << pp(re, r1) << pp(re, r2);
     else if (re.is_union(e, r1, r2)) 
-        return out << pp(re, r1) << "|" << pp(re, r2);
+        return out << "(" << pp(re, r1) << "|" << pp(re, r2) << ")";
     else if (re.is_intersection(e, r1, r2)) 
-        return out << "(" << pp(re, r1) << (html_encode ? ")&amp;(": ")&(" ) << pp(re, r2) << ")";
+        return out << "(" << pp(re, r1) << "&amp;" /*(html_encode ? ")&amp;(" : ")&(")*/ << pp(re, r2) << ")";
     else if (re.is_complement(e, r1)) {
         if (can_skip_parenth(r1))
             return out << "~" << pp(re, r1);

@@ -19,6 +19,7 @@ Notes:
 #include<math.h>
 
 #include "ast/ast_smt2_pp.h"
+#include "ast/ast_pp.h"
 #include "ast/well_sorted.h"
 #include "ast/rewriter/th_rewriter.h"
 #include "ast/used_vars.h"
@@ -1264,6 +1265,16 @@ void fpa2bv_converter::mk_abs(sort * s, expr_ref & x, expr_ref & result) {
     expr_ref sgn(m), sig(m), exp(m);
     split_fp(x, sgn, exp, sig);
     result = m_util.mk_fp(m_bv_util.mk_numeral(0, 1), exp, sig);
+}
+
+void fpa2bv_converter::mk_min_i(func_decl * f, unsigned num, expr * const * args, expr_ref & result) {
+    func_decl_ref fu(m.mk_func_decl(f->get_family_id(), OP_FPA_MIN, 0, nullptr, num, args), m);
+    mk_min(fu, num, args, result);
+}
+
+void fpa2bv_converter::mk_max_i(func_decl * f, unsigned num, expr * const * args, expr_ref & result) {
+    func_decl_ref fu(m.mk_func_decl(f->get_family_id(), OP_FPA_MAX, 0, nullptr, num, args), m);
+    mk_max(fu, num, args, result);
 }
 
 void fpa2bv_converter::mk_min(func_decl * f, unsigned num, expr * const * args, expr_ref & result) {
@@ -3418,6 +3429,16 @@ void fpa2bv_converter::mk_to_sbv(func_decl * f, unsigned num, expr * const * arg
     mk_to_bv(f, num, args, true, result);
 }
 
+void fpa2bv_converter::mk_to_ubv_i(func_decl * f, unsigned num, expr * const * args, expr_ref & result) {
+    func_decl_ref fu(m.mk_func_decl(f->get_family_id(), OP_FPA_TO_UBV, 0, nullptr, num, args), m);
+    mk_to_bv(f, num, args, false, result);
+}
+
+void fpa2bv_converter::mk_to_sbv_i(func_decl * f, unsigned num, expr * const * args, expr_ref & result) {
+    func_decl_ref fu(m.mk_func_decl(f->get_family_id(), OP_FPA_TO_SBV, 0, nullptr, num, args), m);
+    mk_to_bv(f, num, args, true, result);
+}
+
 expr_ref fpa2bv_converter::nan_wrap(expr * n) {
     expr_ref n_bv(m), arg_is_nan(m), nan(m), nan_bv(m), res(m);
     mk_is_nan(n, arg_is_nan);
@@ -4430,7 +4451,7 @@ expr* fpa2bv_converter_wrapped::bv2fpa_value(sort* s, expr* a, expr* b, expr* c)
     mpfm.set(f, ebits, sbits, mpzm.is_one(sgn_z), mpzm.get_int64(exp_u), sig_z);
     result = m_util.mk_value(f);
 
-    TRACE("t_fpa", tout << "result: [" <<
+    TRACE("t_fpa", tout << mk_pp(a, m) << " " << mk_pp(b, m) << " " << mk_pp(c, m) << " result: [" <<
           mpzm.to_string(sgn_z) << "," <<
           mpzm.to_string(exp_z) << "," <<
           mpzm.to_string(sig_z) << "] --> " <<

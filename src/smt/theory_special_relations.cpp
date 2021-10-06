@@ -325,14 +325,12 @@ namespace smt {
                           );
                     continue;
                 }
-                expr_ref f_app(m.mk_app(f, arg1, arg2), m);                
+                expr_ref f_app(m.mk_app(f, arg1, arg2), m);   
                 ensure_enode(f_app);
                 literal f_lit = ctx.get_literal(f_app);
                 switch (ctx.get_assignment(f_lit)) {
                 case l_true:
-                    UNREACHABLE(); 
-                    // it should already be the case that v1 and reach v2 in the graph.
-                    // whenever f(n1, n2) is asserted.
+                    SASSERT(new_assertion);
                     break;
                 case l_false: {
                     //
@@ -903,7 +901,7 @@ namespace smt {
                                          m.mk_app(memf, x, m.mk_app(tl, S))));            
             recfun_replace rep(m);
             var* vars[2] = { xV, SV };
-            p.set_definition(rep, mem, 2, vars, mem_body);
+            p.set_definition(rep, mem, false, 2, vars, mem_body);
         }
 
         sort_ref tup(dt.mk_pair_datatype(listS, listS, fst, snd, pair), m);
@@ -926,7 +924,7 @@ namespace smt {
 
             recfun_replace rep(m);
             var* vars[5] = { aV, bV, AV, SV, tupV };
-            p.set_definition(rep, nxt, 5, vars, next_body);
+            p.set_definition(rep, nxt, false, 5, vars, next_body);
         }
 
         {
@@ -961,7 +959,7 @@ namespace smt {
             TRACE("special_relations", tout << connected_body << "\n";);
             recfun_replace rep(m);
             var* vars[3] = { AV, dstV, SV };
-            p.set_definition(rep, connected, 3, vars, connected_body);            
+            p.set_definition(rep, connected, false, 3, vars, connected_body);
         }
 
         {
