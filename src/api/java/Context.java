@@ -1717,9 +1717,8 @@ public class Context implements AutoCloseable {
      * {@code [domain -> range]}, and {@code i} must have the sort
      * {@code domain}. The sort of the result is {@code range}.
      *
-     * @see #mkArraySort
+     * @see #mkArraySort(Sort[], Sort)
      * @see #mkStore
-
      **/
     public <D extends Sort, R extends Sort> Expr<R> mkSelect(Expr<ArraySort<D, R>> a, Expr<D> i)
     {
@@ -1740,7 +1739,7 @@ public class Context implements AutoCloseable {
      * {@code [domains -> range]}, and {@code args} must have the sorts
      * {@code domains}. The sort of the result is {@code range}.
      *
-     * @see #mkArraySort
+     * @see #mkArraySort(Sort[], Sort)
      * @see #mkStore
      **/
     public <R extends Sort> Expr<R> mkSelect(Expr<ArraySort<Sort, R>> a, Expr<?>[] args)
@@ -1764,7 +1763,7 @@ public class Context implements AutoCloseable {
      * {@code select}) on all indices except for {@code i}, where it
      * maps to {@code v} (and the {@code select} of {@code a}
      * with respect to {@code i} may be a different value). 
-     * @see #mkArraySort
+     * @see #mkArraySort(Sort[], Sort)
      * @see #mkSelect
 
      **/
@@ -1789,7 +1788,7 @@ public class Context implements AutoCloseable {
      * {@code select}) on all indices except for {@code args}, where it
      * maps to {@code v} (and the {@code select} of {@code a}
      * with respect to {@code args} may be a different value). 
-     * @see #mkArraySort
+     * @see #mkArraySort(Sort[], Sort)
      * @see #mkSelect
 
      **/
@@ -1807,7 +1806,7 @@ public class Context implements AutoCloseable {
      * Remarks:  The resulting term is an array, such
      * that a {@code select} on an arbitrary index produces the value
      * {@code v}. 
-     * @see #mkArraySort
+     * @see #mkArraySort(Sort[], Sort)
      * @see #mkSelect
      *
      **/
@@ -1827,7 +1826,7 @@ public class Context implements AutoCloseable {
      * {@code f} must have type {@code  range_1 .. range_n -> range}.
      * {@code v} must have sort range. The sort of the result is
      * {@code [domain_i -> range]}. 
-     * @see #mkArraySort
+     * @see #mkArraySort(Sort[], Sort)
      * @see #mkSelect
      * @see #mkStore
 
@@ -2017,7 +2016,15 @@ public class Context implements AutoCloseable {
      */
     public SeqExpr<CharSort> mkString(String s)
     {
-        return (SeqExpr<CharSort>) Expr.create(this, Native.mkString(nCtx(), s));
+        StringBuilder buf = new StringBuilder();
+        for (int i = 0; i < s.length(); ++i) {
+	    int code = s.codePointAt(i);
+	    if (code <= 32 || 127 < code) 
+	        buf.append(String.format("\\u{%x}", code));
+	    else
+	        buf.append(s.charAt(i));
+        }
+        return (SeqExpr<CharSort>) Expr.create(this, Native.mkString(nCtx(), buf.toString()));
     }
 
     /**
@@ -2100,6 +2107,26 @@ public class Context implements AutoCloseable {
     }
 
     /**
+     * Check if the string s1 is lexicographically strictly less than s2.
+     */
+
+    public BoolExpr MkStringLt(SeqSort<CharSort> s1, SeqSort<CharSort> s2) 
+    {
+        checkContextMatch(s1, s2);
+        return new BoolExpr(this, Native.mkStrLt(nCtx(), s1.getNativeObject(), s2.getNativeObject()));
+    }
+
+    /**
+     * Check if the string s1 is lexicographically less or equal to s2.
+     */
+    public BoolExpr MkStringLe(SeqSort<CharSort> s1, SeqSort<CharSort> s2)
+    {
+        checkContextMatch(s1, s2);
+        return new BoolExpr(this, Native.mkStrLe(nCtx(), s1.getNativeObject(), s2.getNativeObject()));
+    }
+
+
+    /**
      * Retrieve sequence of length one at index.
      */
     public <R extends Sort> SeqExpr<R> mkAt(Expr<SeqSort<R>> s, Expr<IntSort> index)
@@ -2171,6 +2198,14 @@ public class Context implements AutoCloseable {
     {
         checkContextMatch(re);
         return (ReExpr<R>) Expr.create(this, Native.mkReStar(nCtx(), re.getNativeObject()));
+    }
+
+    /**
+     * Create power regular expression.
+     */
+    public <R extends Sort> ReExpr<R> mkPower(Expr<ReSort<R>> re, int n)
+    {
+        return (ReExpr<R>) Expr.create(this, Native.mkRePower(nCtx(), re.getNativeObject(), n));
     }
 
     /**
@@ -2248,7 +2283,18 @@ public class Context implements AutoCloseable {
     }
 
     /**
+     * Create a difference regular expression.
+     */
+    public <R extends Sort> ReExpr<R> mkDiff(Expr<ReSort<R>> a, Expr<ReSort<R>> b)
+    {
+        checkContextMatch(a, b);
+	return (ReExpr<R>) Expr.create(this, Native.mkReDiff(nCtx(), a.getNativeObject(), b.getNativeObject()));
+    }
+
+
+    /**
      * Create the empty regular expression.
+     * Coresponds to re.none
      */
     public <R extends Sort> ReExpr<R> mkEmptyRe(R s)
     {
@@ -2257,10 +2303,20 @@ public class Context implements AutoCloseable {
 
     /**
      * Create the full regular expression.
+     * Corresponds to re.all
      */
     public <R extends Sort> ReExpr<R> mkFullRe(R s)
     {
         return (ReExpr<R>) Expr.create(this, Native.mkReFull(nCtx(), s.getNativeObject()));
+    }
+
+    /**
+     * Create regular expression that accepts all characters
+     * Corresponds to re.allchar
+     */
+    public <R extends Sort> ReExpr<R> mkAllcharRe(R s)
+    {
+        return (ReExpr<R>) Expr.create(this, Native.mkReAllchar(nCtx(), s.getNativeObject()));
     }
 
     /**
@@ -4010,6 +4066,37 @@ public class Context implements AutoCloseable {
         return new BitVecExpr(this, Native.mkFpaToFpIntReal(nCtx(), rm.getNativeObject(), exp.getNativeObject(), sig.getNativeObject(), s.getNativeObject()));
     }
 
+    /**
+     * Creates or a linear order.
+     * @param index The index of the order.
+     * @param sort The sort of the order.
+     */
+    public <R extends Sort> FuncDecl<BoolSort> mkLinearOrder(R sort, int index) {
+        return (FuncDecl<BoolSort>) FuncDecl.create(
+                this,
+                Native.mkLinearOrder(
+                        nCtx(),
+                        sort.getNativeObject(),
+                        index
+                )
+        );
+    }
+
+    /**
+     * Creates or a partial order.
+     * @param index The index of the order.
+     * @param sort The sort of the order.
+     */
+    public <R extends Sort> FuncDecl<BoolSort> mkPartialOrder(R sort, int index) {
+        return (FuncDecl<BoolSort>) FuncDecl.create(
+                this,
+                Native.mkPartialOrder(
+                    nCtx(),
+                    sort.getNativeObject(),
+                    index
+                )
+        );
+    }
 
     /**
      * Wraps an AST.

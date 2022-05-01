@@ -66,6 +66,7 @@ namespace array {
         array_union_find                     m_find;
 
         theory_var find(theory_var v) { return m_find.find(v); }
+        theory_var find(euf::enode* n) { return find(n->get_th_var(get_id())); }
         func_decl_ref_vector const& sort2diff(sort* s);
 
         // internalize
@@ -73,12 +74,8 @@ namespace array {
         bool visited(expr* e) override;
         bool post_visit(expr* e, bool sign, bool root) override;
         void ensure_var(euf::enode* n);
-        void internalize_store(euf::enode* n);
-        void internalize_select(euf::enode* n);
-        void internalize_lambda(euf::enode* n);
-        void internalize_ext(euf::enode* n);
-        void internalize_default(euf::enode* n);
-        void internalize_map(euf::enode* n);
+        void internalize_eh(euf::enode* n);
+        void internalize_lambda_eh(euf::enode* n);
 
         // axioms
         struct axiom_record {
@@ -157,7 +154,6 @@ namespace array {
         bool assert_axiom(unsigned idx);
         bool assert_select(unsigned idx, axiom_record & r);
         bool assert_default(axiom_record & r);
-        bool is_relevant(axiom_record const& r) const;
         void set_applied(unsigned idx) { m_axiom_trail[idx].set_applied(); }
         bool is_applied(unsigned idx) const { return m_axiom_trail[idx].is_applied(); }
         bool is_delayed(unsigned idx) const { return m_axiom_trail[idx].is_delayed(); }
@@ -185,7 +181,9 @@ namespace array {
         bool assert_congruent_axiom(expr* e1, expr* e2);
         bool add_delayed_axioms();
         bool add_as_array_eqs(euf::enode* n);
-        
+        expr_ref apply_map(app* map, unsigned n, expr* const* args);
+        bool is_map_combinator(expr* e) const;
+
         bool has_unitary_domain(app* array_term);
         bool has_large_domain(expr* array_term);
         std::pair<app*, func_decl*> mk_epsilon(sort* s);
@@ -197,7 +195,7 @@ namespace array {
         // solving          
         void add_parent_select(theory_var v_child, euf::enode* select);
         void add_parent_default(theory_var v_child, euf::enode* def);
-        void add_lambda(theory_var v, euf::enode* lambda);
+        void add_lambda(theory_var v, euf::enode* lambda);        
         void add_parent_lambda(theory_var v_child, euf::enode* lambda);
 
         void propagate_select_axioms(var_data const& d, euf::enode* a);
@@ -206,7 +204,7 @@ namespace array {
 
         void set_prop_upward(theory_var v);
         void set_prop_upward(var_data& d);
-        void set_prop_upward(euf::enode* n);
+        void set_prop_upward_store(euf::enode* n);
         unsigned get_lambda_equiv_size(var_data const& d) const;
         bool should_set_prop_upward(var_data const& d) const;
         bool should_prop_upward(var_data const& d) const;
@@ -220,11 +218,39 @@ namespace array {
         void pop_core(unsigned n) override;
         
         // models
+        // I need a set of select enodes where select(A,i) = select(B,j) if i->get_root() == j->get_root()
+        struct sel_khasher {
+            unsigned operator()(euf::enode const * n) const { return 0; }
+        };
+
+        struct sel_chasher {
+            unsigned operator()(euf::enode const * n, unsigned idx) const { 
+                return n->get_arg(idx+1)->get_root()->hash();
+            }
+        };
+        
+        struct sel_hash {
+            unsigned operator()(euf::enode * n) const;
+        };
+
+        struct sel_eq {
+            bool operator()(euf::enode * n1, euf::enode * n2) const;
+        };
+        
+        typedef ptr_hashtable<euf::enode, sel_hash, sel_eq> select_set;
         euf::enode_vector   m_defaults;       // temporary field for model construction
         ptr_vector<expr>    m_else_values;    // 
         svector<int>        m_parents;        // temporary field for model construction
+        obj_map<euf::enode, select_set*>  m_selects;        // mapping from array -> relevant selects
+        ptr_vector<euf::enode>            m_selects_domain; 
+        ptr_vector<select_set>            m_selects_range;
+
         bool must_have_different_model_values(theory_var v1, theory_var v2);
+        select_set* get_select_set(euf::enode* n);
         void collect_defaults();
+        void collect_selects();               // mapping from array -> relevant selects
+        void propagate_select_to_store_parents(euf::enode* r, euf::enode* sel, euf::enode_pair_vector& todo);
+
         void mg_merge(theory_var u, theory_var v);
         theory_var mg_find(theory_var n);
         void set_default(theory_var v, euf::enode* n);
@@ -256,6 +282,8 @@ namespace array {
         void new_diseq_eh(euf::th_eq const& eq) override;
         bool unit_propagate() override;
         void init_model() override;
+        void finalize_model(model& mdl) override;
+        bool include_func_interp(func_decl* f) const override { return a.is_ext(f); }
         void add_value(euf::enode* n, model& mdl, expr_ref_vector& values) override;
         bool add_dep(euf::enode* n, top_sort<euf::enode>& dep) override;
         sat::literal internalize(expr* e, bool sign, bool root, bool learned) override;
@@ -264,7 +292,9 @@ namespace array {
         void apply_sort_cnstr(euf::enode* n, sort* s) override;
         bool is_shared(theory_var v) const override;
         bool enable_self_propagate() const override { return true; }
-
+        void relevant_eh(euf::enode* n) override;
+        bool enable_ackerman_axioms(euf::enode* n) const override { return !a.is_array(n->get_sort()); }
+ 
         void merge_eh(theory_var, theory_var, theory_var v1, theory_var v2);
         void after_merge_eh(theory_var r1, theory_var r2, theory_var v1, theory_var v2) {}
         void unmerge_eh(theory_var v1, theory_var v2) {}

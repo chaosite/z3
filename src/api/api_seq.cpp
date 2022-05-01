@@ -55,15 +55,35 @@ extern "C" {
         Z3_CATCH_RETURN(nullptr);
     }
 
-
     Z3_ast Z3_API Z3_mk_lstring(Z3_context c, unsigned sz, Z3_string str) {
         Z3_TRY;
-        LOG_Z3_mk_string(c, str);
+        LOG_Z3_mk_lstring(c, sz, str);
         RESET_ERROR_CODE();
         unsigned_vector chs;
         for (unsigned i = 0; i < sz; ++i) chs.push_back((unsigned char)str[i]);
         zstring s(sz, chs.data());
         app* a = mk_c(c)->sutil().str.mk_string(s);
+        mk_c(c)->save_ast_trail(a);
+        RETURN_Z3(of_ast(a));
+        Z3_CATCH_RETURN(nullptr);
+    }
+
+    Z3_ast Z3_API Z3_mk_u32string(Z3_context c, unsigned sz, unsigned const chars[]) {
+        Z3_TRY;
+        LOG_Z3_mk_u32string(c, sz, chars);
+        RESET_ERROR_CODE();
+        zstring s(sz, chars);
+        app* a = mk_c(c)->sutil().str.mk_string(s);
+        mk_c(c)->save_ast_trail(a);
+        RETURN_Z3(of_ast(a));
+        Z3_CATCH_RETURN(nullptr);
+    }
+
+    Z3_ast Z3_API Z3_mk_char(Z3_context c, unsigned ch) {
+        Z3_TRY;
+        LOG_Z3_mk_char(c, ch);
+        RESET_ERROR_CODE();
+        app* a = mk_c(c)->sutil().str.mk_char(ch);        
         mk_c(c)->save_ast_trail(a);
         RETURN_Z3(of_ast(a));
         Z3_CATCH_RETURN(nullptr);
@@ -187,10 +207,9 @@ extern "C" {
         svector<char> buff;
         for (unsigned i = 0; i < str.length(); ++i) {
             unsigned ch = str[i];
-            if (ch <= 32 || ch >= 127) {
+            if (ch == 0 || ch >= 256 || (ch == '\\' && i + 1 < str.length() && str[i+1] == 'u')) {
                 buff.reset();
                 buffer.push_back('\\');
-//                buffer.push_back('\\');  // possibly replace by native non-escaped version?
                 buffer.push_back('u');
                 buffer.push_back('{');
                 while (ch > 0) {
@@ -215,6 +234,38 @@ extern "C" {
         Z3_CATCH_RETURN("");
     }
 
+    unsigned Z3_API Z3_get_string_length(Z3_context c, Z3_ast s) {
+        Z3_TRY;
+        LOG_Z3_get_string_length(c, s);
+        RESET_ERROR_CODE();
+        zstring str;
+        if (!mk_c(c)->sutil().str.is_string(to_expr(s), str)) {
+            SET_ERROR_CODE(Z3_INVALID_ARG, "expression is not a string literal");
+        }
+        return str.length();
+        Z3_CATCH_RETURN(0);
+    }    
+
+    void Z3_API Z3_get_string_contents(Z3_context c, Z3_ast s, unsigned length, unsigned contents[]) {
+        Z3_TRY;
+        LOG_Z3_get_string_contents(c, s, length, contents);
+        RESET_ERROR_CODE();
+        zstring str;
+        if (!mk_c(c)->sutil().str.is_string(to_expr(s), str)) {
+            SET_ERROR_CODE(Z3_INVALID_ARG, "expression is not a string literal");
+            return;
+        }
+        if (str.length() != length) {
+            SET_ERROR_CODE(Z3_INVALID_ARG, "string size disagrees with supplied buffer length");
+            return;
+        }
+        for (unsigned i = 0; i < length; ++i)
+            contents[i] = str[i];
+        
+        Z3_CATCH;
+    }
+
+
 #define MK_SORTED(NAME, FN )                                    \
     Z3_ast Z3_API NAME(Z3_context c, Z3_sort s) {               \
     Z3_TRY;                                                     \
@@ -235,6 +286,8 @@ extern "C" {
     MK_BINARY(Z3_mk_seq_contains, mk_c(c)->get_seq_fid(), OP_SEQ_CONTAINS, SKIP);
     MK_BINARY(Z3_mk_str_lt, mk_c(c)->get_seq_fid(), OP_STRING_LT, SKIP);
     MK_BINARY(Z3_mk_str_le, mk_c(c)->get_seq_fid(), OP_STRING_LE, SKIP);
+    MK_UNARY(Z3_mk_string_to_code, mk_c(c)->get_seq_fid(), OP_STRING_TO_CODE, SKIP);
+    MK_UNARY(Z3_mk_string_from_code, mk_c(c)->get_seq_fid(), OP_STRING_FROM_CODE, SKIP);
 
     MK_TERNARY(Z3_mk_seq_extract, mk_c(c)->get_seq_fid(), OP_SEQ_EXTRACT, SKIP);
     MK_TERNARY(Z3_mk_seq_replace, mk_c(c)->get_seq_fid(), OP_SEQ_REPLACE, SKIP);
@@ -262,10 +315,22 @@ extern "C" {
         Z3_CATCH_RETURN(nullptr);
     }
 
+    Z3_ast Z3_API Z3_mk_re_power(Z3_context c, Z3_ast r, unsigned n) {
+        Z3_TRY;
+        LOG_Z3_mk_re_power(c, r, n);
+        RESET_ERROR_CODE();
+        app* a = mk_c(c)->sutil().re.mk_power(to_expr(r), n);
+        mk_c(c)->save_ast_trail(a);
+        RETURN_Z3(of_ast(a));        
+        Z3_CATCH_RETURN(nullptr);
+    }
+
+
     MK_UNARY(Z3_mk_re_plus, mk_c(c)->get_seq_fid(), OP_RE_PLUS, SKIP);
     MK_UNARY(Z3_mk_re_star, mk_c(c)->get_seq_fid(), OP_RE_STAR, SKIP);
     MK_UNARY(Z3_mk_re_option, mk_c(c)->get_seq_fid(), OP_RE_OPTION, SKIP);
     MK_UNARY(Z3_mk_re_complement, mk_c(c)->get_seq_fid(), OP_RE_COMPLEMENT, SKIP);
+    MK_BINARY(Z3_mk_re_diff, mk_c(c)->get_seq_fid(), OP_RE_DIFF, SKIP);
     MK_NARY(Z3_mk_re_union, mk_c(c)->get_seq_fid(), OP_RE_UNION, SKIP);
     MK_NARY(Z3_mk_re_intersect, mk_c(c)->get_seq_fid(), OP_RE_INTERSECT, SKIP);
     MK_NARY(Z3_mk_re_concat, mk_c(c)->get_seq_fid(), OP_RE_CONCAT, SKIP);

@@ -34,7 +34,7 @@ Revision History:
 #include "ast/datatype_decl_plugin.h"
 #include "tactic/tactical.h"
 #include "qe/mbp/mbp_solve_plugin.h"
-#include "qe/qe_lite.h"
+#include "qe/lite/qe_lite.h"
 
 namespace qel {
 
@@ -2459,12 +2459,14 @@ public:
         m_params(p),
         m_qe(m, p, true) {}
 
+    char const* name() const override { return "qe_lite"; }
+
     tactic * translate(ast_manager & m) override {
         return alloc(qe_lite_tactic, m, m_params);
     }
 
     void updt_params(params_ref const & p) override {
-        m_params = p;
+        m_params.append(p);
         // m_imp->updt_params(p);
     }
 

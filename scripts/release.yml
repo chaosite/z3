@@ -6,7 +6,7 @@
 trigger: none
 
 variables:
-  ReleaseVersion: '4.8.12'
+  ReleaseVersion: '4.8.17'
 
 stages:
 
@@ -43,6 +43,28 @@ stages:
         artifactName: 'macOSBuild'
         targetPath: $(Build.ArtifactStagingDirectory)
 
+  - job: MacBuildArm64
+    displayName: "macOS Build"
+    pool:
+      vmImage: "macOS-latest"
+    steps:
+    - task: PythonScript@0
+      displayName: Build
+      inputs:
+        scriptSource: 'filepath'
+        scriptPath: scripts/mk_unix_dist.py
+        arguments: --dotnet-key=$(Build.SourcesDirectory)/resources/z3.snk --nojava --arch=arm64
+    - task: CopyFiles@2
+      inputs:
+        sourceFolder: dist
+        contents: '*.zip'
+        targetFolder: $(Build.ArtifactStagingDirectory)
+    - task: PublishPipelineArtifact@0
+      inputs:
+        artifactName: 'macOSBuildArm64'
+        targetPath: $(Build.ArtifactStagingDirectory)
+
+
   - job: UbuntuBuild
     displayName: "Ubuntu build"
     pool:
@@ -76,14 +98,14 @@ stages:
   - job: UbuntuDoc
     displayName: "Ubuntu Doc build"
     pool:
-      vmImage: "Ubuntu-18.04"
+      vmImage: "Ubuntu-latest"
     steps:
     - script: sudo apt-get install ocaml opam libgmp-dev
-    - script: sudo apt-get install doxygen
-    - script: sudo apt-get install graphviz
     - script: opam init -y
     - script: eval `opam config env`; opam install zarith ocamlfind -y
-    - script: python scripts/mk_make.py --ml --staticlib
+    - script: eval `opam config env`; python scripts/mk_make.py --ml
+    - script: sudo apt-get install doxygen
+    - script: sudo apt-get install graphviz
     - script: |
         set -e
         cd build
@@ -91,7 +113,6 @@ stages:
         make -j3
         make -j3 examples
         make -j3 test-z3
-        ./ml_example
         cd ..
     - script: |
         set -e
@@ -156,8 +177,8 @@ stages:
 - stage: Package
   jobs:
 
-  - job: NuGetPackage
-    displayName: "NuGet packaging"
+  - job: NuGet64
+    displayName: "NuGet 64 packaging"
     pool:
       vmImage: "windows-latest"
     steps:
@@ -182,6 +203,10 @@ stages:
       inputs:
         artifact: 'macOSBuild'
         path: $(Agent.TempDirectory)\package
+    - task: NuGetToolInstaller@0
+      inputs:
+        versionSpec: 5.x
+        checkLatest: false        
     - task: PythonScript@0
       displayName: 'Python: assemble files'
       inputs:
@@ -196,10 +221,6 @@ stages:
           $(Build.SourceVersion)
           $(Build.SourcesDirectory)
           symbols
-    - task: NuGetToolInstaller@0
-      inputs:
-        versionSpec: 5.x
-        checkLatest: false
     - task: NugetCommand@2
       displayName: 'NuGet Pack Symbols'
       inputs:
@@ -262,7 +283,107 @@ stages:
     - task: PublishPipelineArtifact@1
       inputs:
         targetPath: $(Build.ArtifactStagingDirectory)
-        artifactName: 'NuGetPackage'
+        artifactName: 'NuGet'
+
+  - job: NuGet32
+    displayName: "NuGet 32 packaging"
+    pool:
+      vmImage: "windows-latest"
+    steps:
+    - powershell: write-host $(System.DefinitionId)
+      displayName: 'System.DefinitionId'
+    - powershell: write-host $(Build.BuildId)
+      displayName: 'Build.BuildId'
+    - powershell: write-host $(System.TeamProjectId)
+      displayName: 'System.TeamProjectId'
+    - task: DownloadPipelineArtifact@2
+      displayName: 'Download Win32 Build'
+      inputs:
+        artifact: 'WindowsBuild-x86'
+        path: $(Agent.TempDirectory)\package
+    - task: NuGetToolInstaller@0
+      inputs:
+        versionSpec: 5.x
+        checkLatest: false        
+    - task: PythonScript@0
+      displayName: 'Python: assemble files'
+      inputs:
+        scriptSource: 'filepath'
+        scriptPath: scripts\mk_nuget_task.py
+        workingDirectory: $(Agent.TempDirectory)\package
+        arguments:
+          $(Agent.TempDirectory)\package
+          $(ReleaseVersion)
+          $(Build.Repository.Uri)
+          $(Build.SourceBranchName)
+          $(Build.SourceVersion)
+          $(Build.SourcesDirectory)
+          symbols
+          x86
+    - task: NugetCommand@2
+      displayName: 'NuGet Pack Symbols'
+      inputs:
+        command: custom
+        arguments: 'pack $(Agent.TempDirectory)\package\out\Microsoft.Z3.x86.sym.nuspec -OutputDirectory $(Build.ArtifactStagingDirectory) -Verbosity detailed -Symbols -SymbolPackageFormat snupkg -BasePath $(Agent.TempDirectory)\package\out' 
+    - task: EsrpCodeSigning@1
+      displayName: 'Sign Package'
+      inputs:
+        ConnectedServiceName: 'z3-esrp-signing-2'
+        FolderPath: $(Build.ArtifactStagingDirectory)
+        Pattern: Microsoft.Z3.x86.$(ReleaseVersion).nupkg
+        signConfigType: 'inlineSignParams'
+        inlineOperation: |
+          [
+            {
+              "KeyCode" : "CP-401405",
+              "OperationCode" : "NuGetSign",
+              "Parameters" : {},
+              "ToolName" : "sign",
+              "ToolVersion" : "1.0"
+            },
+            {
+              "KeyCode" : "CP-401405",
+              "OperationCode" : "NuGetVerify",
+              "Parameters" : {},
+              "ToolName" : "sign",
+              "ToolVersion" : "1.0"
+            }
+          ]
+        SessionTimeout: '60'
+        MaxConcurrency: '50'
+        MaxRetryAttempts: '5'
+    - task: EsrpCodeSigning@1
+      displayName: 'Sign Symbol Package'
+      inputs:
+        ConnectedServiceName: 'z3-esrp-signing-2'
+        FolderPath: $(Build.ArtifactStagingDirectory)
+        Pattern: Microsoft.Z3.x86.$(ReleaseVersion).snupkg
+        signConfigType: 'inlineSignParams'
+        inlineOperation: |
+          [
+            {
+              "KeyCode" : "CP-401405",
+              "OperationCode" : "NuGetSign",
+              "Parameters" : {},
+              "ToolName" : "sign",
+              "ToolVersion" : "1.0"
+            },
+            {
+              "KeyCode" : "CP-401405",
+              "OperationCode" : "NuGetVerify",
+              "Parameters" : {},
+              "ToolName" : "sign",
+              "ToolVersion" : "1.0"
+            }
+          ]
+        SessionTimeout: '60'
+        MaxConcurrency: '50'
+        MaxRetryAttempts: '5'        
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: $(Build.ArtifactStagingDirectory)
+        artifactName: 'NuGet32'
+
 
   - job: PythonPackage
     displayName: "Python packaging"
@@ -310,6 +431,7 @@ stages:
   jobs:
 
   - job: GitHubPublish
+    condition: eq(1,1)
     displayName: "Publish to GitHub"
     pool:
       vmImage: "windows-latest"
@@ -330,6 +452,11 @@ stages:
         artifact: 'macOSBuild'
         path: $(Agent.TempDirectory)
     - task: DownloadPipelineArtifact@2
+      displayName: 'Download macOSArm64 Build'
+      inputs:
+        artifact: 'macOSBuildArm64'
+        path: $(Agent.TempDirectory)	
+    - task: DownloadPipelineArtifact@2
       displayName: 'Download Win32 Build'
       inputs:
         artifact: 'WindowsBuild-x86'
@@ -345,9 +472,14 @@ stages:
         artifact: 'WindowsBuild-x64'
         path: $(Agent.TempDirectory)
     - task: DownloadPipelineArtifact@2
-      displayName: 'Download NuGet Package'
+      displayName: 'Download NuGet64 Package'
       inputs:
-        artifact: 'NuGetPackage'
+        artifact: 'NuGet'
+        path: $(Agent.TempDirectory)	
+    - task: DownloadPipelineArtifact@2
+      displayName: 'Download NuGet32 Package'
+      inputs:
+        artifact: 'NuGet32'
         path: $(Agent.TempDirectory)	
     - task: GitHubRelease@0
       inputs:
@@ -397,9 +529,9 @@ stages:
         artifact: 'PythonPackage'
         path: dist
     - task: DownloadSecureFile@1
-      name: pypirc
+      name: pypircs
       inputs:
-        secureFile: 'pypirc'
+        secureFile: 'pypircs'
     - script: python3 -m pip install --upgrade pip
     - script: python3 -m pip install --user -U setuptools importlib_metadata wheel twine 
-    - script: python3 -m twine upload --config-file $(pypirc.secureFilePath) -r $(pypiReleaseServer) dist/*
+    - script: python3 -m twine upload --config-file $(pypircs.secureFilePath) -r $(pypiReleaseServer) dist/*

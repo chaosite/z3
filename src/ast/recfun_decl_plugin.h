@@ -93,6 +93,7 @@ namespace recfun {
     // closure for computing whether a `rhs` expression is immediate
     struct is_immediate_pred {
         virtual bool operator()(expr * rhs) = 0;
+        virtual ~is_immediate_pred() = default;
     };
 
     class def {
@@ -304,7 +305,7 @@ namespace recfun {
             m_pred(pred), m_cdef(&d), m_args(args) {}
         body_expansion(body_expansion const & from): 
             m_pred(from.m_pred), m_cdef(from.m_cdef), m_args(from.m_args) {}
-        body_expansion(body_expansion && from) : 
+        body_expansion(body_expansion && from) noexcept :
             m_pred(from.m_pred), m_cdef(from.m_cdef), m_args(std::move(from.m_args)) {}
 
         std::ostream& display(std::ostream& out) const;

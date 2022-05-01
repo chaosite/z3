@@ -66,7 +66,7 @@ namespace q {
         ptr_vector<quantifier> univ;
         for (sat::literal lit : m_qs.universal()) {
             quantifier* q = to_quantifier(ctx.bool_var2expr(lit.var()));
-            if (ctx.is_relevant(q))
+            if (ctx.is_relevant(lit.var()))
                 univ.push_back(q);
         }
         if (univ.empty())
@@ -184,6 +184,8 @@ namespace q {
         for (euf::enode* n : ctx.get_egraph().enodes_of(f)) {
             expr* t = n->get_arg(idx)->get_expr();
             values.push_back(mdl(t));
+            if (!m.is_value(values.back())) 
+                return expr_ref(m.mk_var(idx, srt), m);
             md->v2t.insert(values.back(), t);
             md->t2v.insert(t, values.back());
         }
@@ -256,7 +258,7 @@ namespace q {
               tout << "invert-app " << mk_pp(t, m) << " = " << mk_pp(value, m) << "\n";
               if (v2r.find(value, r)) 
                   tout << "inverse " << mk_pp(r->get_expr(), m) << "\n";
-              ctx.display(tout);              
+              /*ctx.display(tout); */
               );
         if (v2r.find(value, r)) 
             return r->get_expr();
@@ -299,6 +301,10 @@ namespace q {
         auto term = [&](unsigned j) {
             return md->v2t[md->values[j]];
         };
+        
+        for (unsigned j = 0; j < sz; ++j)
+            std::cout << mk_pp(md->values[j], m) << "\n";
+
 
         expr* arg = t->get_arg(i);
 

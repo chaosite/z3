@@ -1636,6 +1636,7 @@ void cmd_context::pop(unsigned n) {
     restore_aux_pdecls(s.m_aux_pdecls_lim);
     restore_assertions(s.m_assertions_lim);
     restore_psort_inst(s.m_psort_inst_stack_lim);
+    m_dt_eh.get()->reset();
     m_mcs.shrink(m_mcs.size() - n);
     m_scopes.shrink(new_lvl);
     if (!m_global_decls)
@@ -1815,6 +1816,9 @@ void cmd_context::display_model(model_ref& mdl) {
 }
 
 void cmd_context::add_declared_functions(model& mdl) {
+    model_params p;
+    if (!p.user_functions())
+        return;
     for (auto const& kv : m_func_decls) {
         func_decl* f = kv.m_value.first();
         if (f->get_family_id() == null_family_id && !mdl.has_interpretation(f)) {
@@ -1828,9 +1832,8 @@ void cmd_context::add_declared_functions(model& mdl) {
                 mdl.register_decl(f, fi);
             }
         }
-        mdl.add_rec_funs();
     }
-    
+    mdl.add_rec_funs();    
 }
 
 void cmd_context::display_sat_result(lbool r) {
@@ -2108,6 +2111,21 @@ void cmd_context::analyze_failure(expr_mark& seen, model_evaluator& ev, expr* a,
                << (expected_value?"true":"false") << "\n";);                
 
     IF_VERBOSE(11, display_detailed_analysis(verbose_stream(), ev, a));
+
+    if (m().is_iff(a)) {
+        ptr_vector<expr> todo;
+        todo.push_back(a);
+        for (unsigned i = 0; i < todo.size(); ++i) {
+            e = todo[i];
+            if (m().is_and(e) || m().is_or(e) || m().is_iff(e) || m().is_implies(e) || m().is_not(e)) 
+                for (expr* arg : *to_app(e))
+                    todo.push_back(arg);
+            else
+                IF_VERBOSE(10, verbose_stream() << "#" << e->get_id() << " " << mk_bounded_pp(e, m()) << " " << (ev.is_true(e)?"true":"false") << "\n");
+        }
+        return;
+    }
+
 }
 
 void cmd_context::display_detailed_analysis(std::ostream& out, model_evaluator& ev, expr* e) {

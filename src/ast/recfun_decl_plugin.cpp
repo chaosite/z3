@@ -79,13 +79,15 @@ namespace recfun {
     }
 
     // does `e` contain any `ite` construct?
+    // subject to the then/else branch using a recursive call,
+    // but the guard does not.
     bool def::contains_ite(util& u, expr * e) {
         struct ite_find_p : public i_expr_pred {
             ast_manager & m;
             def& d;
             util& u;
             ite_find_p(ast_manager & m, def& d, util& u) : m(m), d(d), u(u) {}
-            bool operator()(expr * e) override { return m.is_ite(e) && d.contains_def(u, e); }
+            bool operator()(expr * e) override { return m.is_ite(e) && !d.contains_def(u, to_app(e)->get_arg(0)) && d.contains_def(u, e); }
         };
         // ignore ites under quantifiers.
         // this is redundant as the code
@@ -225,6 +227,11 @@ namespace recfun {
         m_vars.append(n_vars, vars);
         m_rhs = rhs;
 
+        if (!is_macro)
+            for (expr* e : subterms::all(m_rhs))
+                if (is_lambda(e))
+                    throw default_exception("recursive definitions with lambdas are not supported");
+        
         expr_ref_vector conditions(m);
 
         // is the function a macro (unconditional body)?
@@ -233,6 +240,8 @@ namespace recfun {
             add_case(name, 0, conditions, rhs);
             return;
         }
+
+
         
         // analyze control flow of `rhs`, accumulating guards and
         // rebuilding a `ite`-free RHS on the fly for each path in `rhs`.
@@ -264,11 +273,9 @@ namespace recfun {
                     } 
                     else if (is_app(e)) {
                         // explore arguments
-                        for (expr * arg : *to_app(e)) {
-                            if (contains_ite(u, arg)) {
+                        for (expr * arg : *to_app(e)) 
+                            if (contains_ite(u, arg)) 
                                 stack.push_back(arg);
-                            }
-                        }
                     } 
                 }
             }
@@ -410,10 +417,7 @@ namespace recfun {
 
         promise_def plugin::ensure_def(symbol const& name, unsigned n, sort *const * params, sort * range, bool is_generated) {
             def* d = u().decl_fun(name, n, params, range, is_generated);
-            def* d2 = nullptr;
-            if (m_defs.find(d->get_decl(), d2)) {
-                dealloc(d2);
-            }
+            erase_def(d->get_decl());
             m_defs.insert(d->get_decl(), d);
             return promise_def(&u(), d);
         }

@@ -25,10 +25,11 @@ Author:
 #include "sat/sat_extension.h"
 #include "sat/smt/atom2bool_var.h"
 #include "sat/smt/sat_th.h"
-#include "sat/smt/sat_dual_solver.h"
 #include "sat/smt/euf_ackerman.h"
 #include "sat/smt/user_solver.h"
+#include "sat/smt/euf_relevancy.h"
 #include "smt/params/smt_params.h"
+
 
 namespace euf {
     typedef sat::literal literal;
@@ -72,6 +73,7 @@ namespace euf {
         };
         struct scope {
             unsigned m_var_lim;
+            scope(unsigned l) : m_var_lim(l) {}
         };
 
 
@@ -90,6 +92,7 @@ namespace euf {
         std::function<::solver*(void)>   m_mk_solver;
         ast_manager&                     m;
         sat::sat_internalizer& si;
+        relevancy              m_relevancy;
         smt_params             m_config;
         euf::egraph            m_egraph;
         trail_stack            m_trail;
@@ -99,8 +102,7 @@ namespace euf {
         sat::lookahead*        m_lookahead = nullptr;
         ast_manager*           m_to_m;
         sat::sat_internalizer* m_to_si;
-        scoped_ptr<euf::ackerman>    m_ackerman;
-        scoped_ptr<sat::dual_solver> m_dual_solver;
+        scoped_ptr<euf::ackerman>     m_ackerman;
         user_solver::solver*          m_user_propagator = nullptr;
         th_solver*             m_qsolver = nullptr;
         unsigned               m_generation = 0;
@@ -152,6 +154,7 @@ namespace euf {
         // model building
         expr_ref_vector m_values;
         obj_map<expr, enode*> m_values2root;        
+        model_ref m_qmodel;
         bool include_func_interp(func_decl* f);
         void register_macros(model& mdl);
         void dependencies2values(user_sort& us, deps_t& deps, model_ref& mdl);
@@ -181,15 +184,17 @@ namespace euf {
         void init_drat();
 
         // relevancy
-        bool_vector m_relevant_expr_ids;
-        void ensure_dual_solver();
-        bool init_relevancy();
-
-
+        //bool_vector m_relevant_expr_ids;
+        //bool_vector m_relevant_visited;
+        //ptr_vector<expr> m_relevant_todo;
+        //void init_relevant_expr_ids();
+        //void push_relevant(sat::bool_var v);
+        bool is_propagated(sat::literal lit);
         // invariant
         void check_eqc_bool_assignment() const;
         void check_missing_bool_enode_propagation() const;
         void check_missing_eq_propagation() const;
+        
 
         // diagnosis
         std::ostream& display_justification_ptr(std::ostream& out, size_t* j) const;
@@ -248,6 +253,10 @@ namespace euf {
         sat::sat_internalizer& get_si() { return si; }
         ast_manager& get_manager() { return m; }
         enode* get_enode(expr* e) const { return m_egraph.find(e); }
+        enode* bool_var2enode(sat::bool_var b) const {
+            expr* e = m_bool_var2expr.get(b, nullptr);
+            return e ? get_enode(e) : nullptr;
+        }
         sat::literal expr2literal(expr* e) const { return enode2literal(get_enode(e)); }
         sat::literal enode2literal(enode* n) const { return sat::literal(n->bool_var(), false); }
         lbool value(enode* n) const { return s().value(enode2literal(n)); }
@@ -297,7 +306,9 @@ namespace euf {
         void get_antecedents(literal l, ext_justification_idx idx, literal_vector& r, bool probing) override;
         void get_antecedents(literal l, th_explain& jst, literal_vector& r, bool probing);
         void add_antecedent(enode* a, enode* b);
-        void add_diseq_antecedent(enode* a, enode* b);
+        void add_diseq_antecedent(ptr_vector<size_t>& ex, enode* a, enode* b);
+        void add_explain(size_t* p) { m_explain.push_back(p); }
+        void reset_explain() { m_explain.reset(); }
         void set_eliminated(bool_var v) override;
         void asserted(literal l) override;
         sat::check_result check() override;
@@ -360,26 +371,32 @@ namespace euf {
         th_rewriter& get_rewriter() { return m_rewriter; }
         void rewrite(expr_ref& e) { m_rewriter(e); }
         bool is_shared(euf::enode* n) const;
+        bool enable_ackerman_axioms(expr* n) const;
+        bool is_fixed(euf::enode* n, expr_ref& val, sat::literal_vector& explain);
 
         // relevancy
-        bool m_relevancy = true;
-        bool relevancy_enabled() const { return m_relevancy && get_config().m_relevancy_lvl > 0; }
-        void disable_relevancy(expr* e) { IF_VERBOSE(0, verbose_stream() << "disabling relevancy " << mk_pp(e, m) << "\n"); m_relevancy = false;  }
-        void add_root(unsigned n, sat::literal const* lits);
+
+        bool relevancy_enabled() const { return m_relevancy.enabled(); }
+        void disable_relevancy(expr* e) { IF_VERBOSE(0, verbose_stream() << "disabling relevancy " << mk_pp(e, m) << "\n"); m_relevancy.set_enabled(false); }
+        void add_root(unsigned n, sat::literal const* lits) { m_relevancy.add_root(n, lits); }
         void add_root(sat::literal_vector const& lits) { add_root(lits.size(), lits.data()); }
         void add_root(sat::literal lit) { add_root(1, &lit); }
-        void add_root(sat::literal a, sat::literal b) { sat::literal lits[2] = {a, b}; add_root(2, lits); }
+        void add_root(sat::literal lit1, sat::literal lit2) { sat::literal lits[2] = { lit1, lit2, }; add_root(2, lits); }
         void add_aux(sat::literal_vector const& lits) { add_aux(lits.size(), lits.data()); }
-        void add_aux(unsigned n, sat::literal const* lits);
+        void add_aux(unsigned n, sat::literal const* lits) { m_relevancy.add_def(n, lits); }
         void add_aux(sat::literal a) { sat::literal lits[1] = { a }; add_aux(1, lits); }
         void add_aux(sat::literal a, sat::literal b) { sat::literal lits[2] = {a, b}; add_aux(2, lits); } 
         void add_aux(sat::literal a, sat::literal b, sat::literal c) { sat::literal lits[3] = { a, b, c }; add_aux(3, lits); }
-        void track_relevancy(sat::bool_var v);
-        bool is_relevant(expr* e) const;
-        bool is_relevant(enode* n) const;
+        void mark_relevant(sat::literal lit) { m_relevancy.mark_relevant(lit); }
+        bool is_relevant(enode* n) const { return m_relevancy.is_relevant(n); }
+        bool is_relevant(bool_var v) const;
+        bool is_relevant(sat::literal lit) const { return is_relevant(lit.var()); }
+        void relevant_eh(euf::enode* n);
 
+        relevancy& get_relevancy() { return m_relevancy; }
 
         // model construction
+        void save_model(model_ref& mdl);
         void update_model(model_ref& mdl);
         obj_map<expr, enode*> const& values2root();
         void model_updated(model_ref& mdl);
@@ -391,33 +408,37 @@ namespace euf {
         // user propagator
         void user_propagate_init(
             void* ctx,
-            ::solver::push_eh_t& push_eh,
-            ::solver::pop_eh_t& pop_eh,
-            ::solver::fresh_eh_t& fresh_eh);
+            user_propagator::push_eh_t& push_eh,
+            user_propagator::pop_eh_t& pop_eh,
+            user_propagator::fresh_eh_t& fresh_eh);
         bool watches_fixed(enode* n) const;
         void assign_fixed(enode* n, expr* val, unsigned sz, literal const* explain);
         void assign_fixed(enode* n, expr* val, literal_vector const& explain) { assign_fixed(n, val, explain.size(), explain.data()); }
         void assign_fixed(enode* n, expr* val, literal explain) { assign_fixed(n, val, 1, &explain); }
 
-        void user_propagate_register_final(::solver::final_eh_t& final_eh) {
+        void user_propagate_register_final(user_propagator::final_eh_t& final_eh) {
             check_for_user_propagator();
             m_user_propagator->register_final(final_eh);
         }
-        void user_propagate_register_fixed(::solver::fixed_eh_t& fixed_eh) {
+        void user_propagate_register_fixed(user_propagator::fixed_eh_t& fixed_eh) {
             check_for_user_propagator();
             m_user_propagator->register_fixed(fixed_eh);
         }
-        void user_propagate_register_eq(::solver::eq_eh_t& eq_eh) {
+        void user_propagate_register_eq(user_propagator::eq_eh_t& eq_eh) {
             check_for_user_propagator();
             m_user_propagator->register_eq(eq_eh);
         }
-        void user_propagate_register_diseq(::solver::eq_eh_t& diseq_eh) {
+        void user_propagate_register_diseq(user_propagator::eq_eh_t& diseq_eh) {
             check_for_user_propagator();
             m_user_propagator->register_diseq(diseq_eh);
         }
-        unsigned user_propagate_register(expr* e) {
+        void user_propagate_register_created(user_propagator::created_eh_t& ceh) {
             check_for_user_propagator();
-            return m_user_propagator->add_expr(e);
+            m_user_propagator->register_created(ceh);
+        }
+        void user_propagate_register_expr(expr* e) {
+            check_for_user_propagator();
+            m_user_propagator->add_expr(e);
         }
 
         // solver factory

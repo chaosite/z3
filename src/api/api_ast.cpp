@@ -164,7 +164,7 @@ extern "C" {
             return;
         }
         recfun_replace replace(m);
-        p.set_definition(replace, pd, true, n, _vars.data(), abs_body);
+        p.set_definition(replace, pd, false, n, _vars.data(), abs_body);
         Z3_CATCH;
     }
 
@@ -355,7 +355,7 @@ extern "C" {
             return mk_c(c)->mk_external_string(buffer.str());
         }
         else {
-            return mk_c(c)->mk_external_string(_s.bare_str());
+            return mk_c(c)->mk_external_string(_s.str());
         }
         Z3_CATCH_RETURN("");
     }
@@ -1187,6 +1187,9 @@ extern "C" {
             case OP_SEQ_CONTAINS: return Z3_OP_SEQ_CONTAINS;
             case OP_SEQ_EXTRACT: return Z3_OP_SEQ_EXTRACT;
             case OP_SEQ_REPLACE: return Z3_OP_SEQ_REPLACE;
+            case OP_SEQ_REPLACE_RE: return Z3_OP_SEQ_REPLACE_RE;
+            case OP_SEQ_REPLACE_RE_ALL: return Z3_OP_SEQ_REPLACE_RE_ALL;
+            case OP_SEQ_REPLACE_ALL: return Z3_OP_SEQ_REPLACE_ALL;
             case OP_SEQ_AT: return Z3_OP_SEQ_AT;
             case OP_SEQ_NTH: return Z3_OP_SEQ_NTH;
             case OP_SEQ_LENGTH: return Z3_OP_SEQ_LENGTH;
@@ -1210,6 +1213,9 @@ extern "C" {
 
             case OP_STRING_STOI: return Z3_OP_STR_TO_INT;
             case OP_STRING_ITOS: return Z3_OP_INT_TO_STR;
+            case OP_STRING_TO_CODE: return Z3_OP_STR_TO_CODE;
+            case OP_STRING_FROM_CODE: return Z3_OP_STR_FROM_CODE;
+
             case OP_STRING_UBVTOS: return Z3_OP_UBV_TO_STR;
             case OP_STRING_SBVTOS: return Z3_OP_SBV_TO_STR;
             case OP_STRING_LT: return Z3_OP_STRING_LT;
@@ -1218,13 +1224,21 @@ extern "C" {
             case OP_RE_PLUS: return Z3_OP_RE_PLUS;
             case OP_RE_STAR: return Z3_OP_RE_STAR;
             case OP_RE_OPTION: return Z3_OP_RE_OPTION;
+            case OP_RE_RANGE: return Z3_OP_RE_RANGE;
             case OP_RE_CONCAT: return Z3_OP_RE_CONCAT;
             case OP_RE_UNION: return Z3_OP_RE_UNION;
+            case OP_RE_DIFF: return Z3_OP_RE_DIFF;
             case OP_RE_INTERSECT: return Z3_OP_RE_INTERSECT;
             case OP_RE_LOOP: return Z3_OP_RE_LOOP;
-            case OP_RE_FULL_SEQ_SET: return Z3_OP_RE_FULL_SET;
-            //case OP_RE_FULL_CHAR_SET: return Z3_OP_RE_FULL_SET;
+            case OP_RE_POWER: return Z3_OP_RE_POWER;
+            case OP_RE_COMPLEMENT: return Z3_OP_RE_COMPLEMENT;
             case OP_RE_EMPTY_SET: return Z3_OP_RE_EMPTY_SET;
+
+            case OP_RE_FULL_SEQ_SET: return Z3_OP_RE_FULL_SET;
+            case OP_RE_FULL_CHAR_SET: return Z3_OP_RE_FULL_CHAR_SET;
+            case OP_RE_OF_PRED: return Z3_OP_RE_OF_PRED;
+            case OP_RE_REVERSE: return Z3_OP_RE_REVERSE;
+            case OP_RE_DERIVATIVE: return Z3_OP_RE_DERIVATIVE;
             default:
                 return Z3_OP_INTERNAL;
             }
@@ -1232,6 +1246,7 @@ extern "C" {
 
         if (mk_c(c)->get_char_fid() == _d->get_family_id()) {
             switch (_d->get_decl_kind()) {
+            case OP_CHAR_CONST: return Z3_OP_CHAR_CONST;
             case OP_CHAR_LE: return Z3_OP_CHAR_LE;
             case OP_CHAR_TO_INT: return Z3_OP_CHAR_TO_INT;
             case OP_CHAR_TO_BV: return Z3_OP_CHAR_TO_BV;
@@ -1313,6 +1328,9 @@ extern "C" {
             default: return Z3_OP_INTERNAL;
             }
         }
+
+        if (mk_c(c)->recfun().get_family_id() == _d->get_family_id())
+            return Z3_OP_RECURSIVE;
 
         return Z3_OP_UNINTERPRETED;
         Z3_CATCH_RETURN(Z3_OP_UNINTERPRETED);

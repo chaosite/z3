@@ -21,7 +21,10 @@ Revision History:
 
 #include "ast/ast_pp.h"
 #include "ast/ast_ll_pp.h"
+#include "ast/recfun_decl_plugin.h"
+#include "ast/rewriter/recfun_replace.h"
 #include "ast/rewriter/seq_axioms.h"
+
 
 namespace seq {
 
@@ -205,10 +208,12 @@ namespace seq {
             drop_last_axiom(e, s);
             return;
         }
+#if 1
         if (is_extract_prefix(s, _i, _l)) {
             extract_prefix_axiom(e, s, l);
             return;
         }
+#endif
         if (is_extract_suffix(s, _i, _l)) {
             extract_suffix_axiom(e, s, i);
             return;
@@ -325,8 +330,7 @@ namespace seq {
       0 <= l <= len(s) => len(e) = l
       len(s) < l => e = s
     */
-    void axioms::extract_prefix_axiom(expr* e, expr* s, expr* l) {
-        
+    void axioms::extract_prefix_axiom(expr* e, expr* s, expr* l) {        
         TRACE("seq", tout << "prefix " << mk_bounded_pp(e, m, 2) << " " << mk_bounded_pp(s, m, 2) << " " << mk_bounded_pp(l, m, 2) << "\n";);
         expr_ref le = mk_len(e);
         expr_ref ls = mk_len(s);
@@ -1029,6 +1033,104 @@ namespace seq {
         add_clause(le, emp);
     }
 
+    /**
+     * Assume that r has the property that if r accepts string p
+     * then r does *not* accept any suffix of p. It is conceptually easy to 
+     * convert a deterministic automaton for a regex to a suffix blocking acceptor
+     * by removing outgoing edges from accepting states and redirecting them
+     * to a sink. Alternative, introduce a different string membership predicate that is 
+     * prefix sensitive. 
+     *
+     * Let e = replace_re(s, r, t)
+     * Then a claim is that the following axioms suffice to encode str.replace_re
+     * 
+     * s = "" => e = t
+     * r = "" => e = s + t
+     * s not in .*r.* => e = t
+     * s = x + y + [z] + u & y + [z] in r & x + y not in .*r.* => e = x + t + u
+     */
+    void axioms::replace_re_axiom(expr* e) {
+        expr* s = nullptr, *r = nullptr, *t = nullptr;
+        VERIFY(seq.str.is_replace_re(e, s, r, t)); 
+        NOT_IMPLEMENTED_YET();
+    }
+
+    // A basic strategy for supporting replace_all and other
+    // similar functions is to use recursive relations.
+    // Then the features for recursive functions that allow expanding definitions
+    // using iterative deepening can be re-used.
+    //
+    // create recursive relation 'ra' with properties:
+    // ra(i, j, s, p, t, r) <- len(s) = i && len(r) = j
+    // ra(i, j, s, p, t, r) <- len(s) > i = 0 && p = "" && r = t + s
+    // ra(i, j, s, p, t, r) <- len(s) > i && p != "" && s = extract(s, 0, i) + p + extract(s, i + len(p), len(s)) && r = extract(r, 0, i) + t + extract(r, i + len(p), len(r)) && ra(i + len(p), j + len(t), s, p, t, r)
+    // ra(i, s, p, t, r) <- ~prefix(p, extract(s, i, len(s)) && at(s,i) = at(r,j) && ra(i + 1, j + 1, s, p, t, r)
+    // which amounts to:
+    //
+    //
+    // Then assert
+    // ra(s, p, t, replace_all(s, p, t))
+    //
+    void axioms::replace_all_axiom(expr* r) {
+        expr* s = nullptr, *p = nullptr, *t = nullptr;
+        VERIFY(seq.str.is_replace_all(r, s, p, t)); 
+        recfun::util rec(m);
+        recfun::decl::plugin& plugin = rec.get_plugin();
+        recfun_replace replace(m);
+        sort* srt = s->get_sort();
+        sort* domain[4] = { srt, srt, srt, srt };
+        auto d = plugin.ensure_def(symbol("ra"), 4, domain, m.mk_bool_sort(), true);
+        func_decl* ra = d.get_def()->get_decl();
+        (void)ra;
+        sort* isrt = a.mk_int();
+        var_ref vi(m.mk_var(5, isrt), m);
+        var_ref vj(m.mk_var(4, isrt), m);
+        var_ref vs(m.mk_var(3, srt), m);
+        var_ref vp(m.mk_var(2, srt), m);
+        var_ref vt(m.mk_var(1, srt), m);
+        var_ref vr(m.mk_var(0, srt), m);
+        var* vars[6] = { vi, vj, vs, vp, vt, vr };
+        (void)vars;
+        expr_ref len_s(seq.str.mk_length(vs), m);
+        expr_ref len_r(seq.str.mk_length(vr), m);
+        expr_ref test1(m.mk_eq(len_s, vi), m);
+        expr_ref branch1(m.mk_eq(len_r, vj), m);
+        expr_ref test2(m.mk_and(a.mk_gt(len_s, vi), m.mk_eq(vi, a.mk_int(0)), seq.str.mk_is_empty(vp)), m);
+        expr_ref branch2(m.mk_eq(vr, seq.str.mk_concat(vt, vs)), m);
+        NOT_IMPLEMENTED_YET();
+#if 0
+        expr_ref test3(, m);
+        expr_ref s1(m_sk.mk_prefix_inv(vp, vs), m);
+        expr_ref r1(m_sk.mk_prefix_inv(vp, vr), m);
+        expr* args1[4] = { s1, vp, vt, r1 };
+        expr_ref branch3(m.mk_and(m.mk_eq(seq.str.mk_concat(vp, s1), vs), 
+                                  m.mk_eq(seq.str.mk_concat(vr, r1), vr),
+                                  m.mk_app(ra, 4, args1)
+                                  ), m);
+        expr_ref s0(m), r0(m);
+        m_sk.decompose(vs, s0, s1);
+        m_sk.decompose(vr, r0, r1);
+        expr* args2[4] = { s1, vp, vt, r1 };
+        expr_ref branch4(m.mk_and(m.mk_eq(vs, seq.str.mk_concat(s0, s1)), 
+                                  m.mk_eq(vr, seq.str.mk_concat(s0, r1)),
+                                  m.mk_app(ra, 4, args2)), m);
+        // s = [s0] + s' && r = [s0] + r' && ra(s', p, t, r')
+
+        expr_ref body(m.mk_ite(test1, branch1, m.mk_ite(test2, branch2, m.mk_ite(test3, branch3, branch4))), m);        
+        plugin.set_definition(replace, d, true, 4, vars, body);
+        expr* args3[4] = { s, p, t, r };
+        expr_ref lit(m.mk_app(ra, 4, args3), m);
+        add_clause(lit);
+#endif
+    }
+
+    void axioms::replace_re_all_axiom(expr* e) {
+        expr* s = nullptr, *p = nullptr, *t = nullptr;
+        VERIFY(seq.str.is_replace_re_all(e, s, p, t)); 
+        NOT_IMPLEMENTED_YET();
+    }
+
+
 
     /**
        Unit is injective:
@@ -1169,5 +1271,6 @@ namespace seq {
         add_clause(~bound_tracker, mk_le(mk_len(s), k));
         return bound_tracker;
     }
+
 
 }

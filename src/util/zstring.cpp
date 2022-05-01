@@ -87,12 +87,12 @@ zstring::zstring(char const* s) {
 
 string_encoding zstring::get_encoding() {
     if (gparams::get_value("encoding") == "unicode") 
-        return unicode;
+        return string_encoding::unicode;
     if (gparams::get_value("encoding") == "bmp") 
-        return bmp;
+        return string_encoding::bmp;
     if (gparams::get_value("encoding") == "ascii") 
-        return ascii;
-    return unicode;
+        return string_encoding::ascii;
+    return string_encoding::unicode;
 }
 
 bool zstring::well_formed() const {
@@ -216,7 +216,7 @@ int zstring::indexofu(zstring const& other, unsigned offset) const {
 int zstring::last_indexof(zstring const& other) const {
     if (other.length() == 0) return length();
     if (other.length() > length()) return -1;
-    for (unsigned last = length() - other.length(); last-- > 0; ) {
+    for (unsigned last = length() - other.length() + 1; last-- > 0; ) {
         bool suffix = true;
         for (unsigned j = 0; suffix && j < other.length(); ++j) {
             suffix = m_buffer[last + j] == other[j];

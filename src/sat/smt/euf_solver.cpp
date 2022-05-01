@@ -41,6 +41,7 @@ namespace euf {
         extension(symbol("euf"), m.mk_family_id("euf")),
         m(m),
         si(si),
+        m_relevancy(*this),
         m_egraph(m),
         m_trail(),
         m_rewriter(m),
@@ -51,12 +52,21 @@ namespace euf {
         m_values(m)
     {
         updt_params(p);
+        m_relevancy.set_enabled(get_config().m_relevancy_lvl > 2);
 
         std::function<void(std::ostream&, void*)> disp =
             [&](std::ostream& out, void* j) { 
             display_justification_ptr(out, reinterpret_cast<size_t*>(j)); 
         };
         m_egraph.set_display_justification(disp);
+
+        if (m_relevancy.enabled()) {
+            std::function<void(euf::enode* root, euf::enode* other)> on_merge =
+                [&](enode* root, enode* other) {
+                m_relevancy.merge(root, other);
+            };
+            m_egraph.set_on_merge(on_merge);
+        }
     }
 
     void solver::updt_params(params_ref const& p) {
@@ -183,6 +193,7 @@ namespace euf {
     }
 
     void solver::propagate(literal lit, ext_justification_idx idx) {
+        mark_relevant(lit);
         s().assign(lit, sat::justification::mk_ext_justification(s().scope_lvl(), idx));
     }
 
@@ -232,11 +243,11 @@ namespace euf {
         m_egraph.explain_eq<size_t>(m_explain, a, b);
     }
 
-    void solver::add_diseq_antecedent(enode* a, enode* b) {
-        sat::bool_var v = get_egraph().explain_diseq(m_explain, a, b);
+    void solver::add_diseq_antecedent(ptr_vector<size_t>& ex, enode* a, enode* b) {
+        sat::bool_var v = get_egraph().explain_diseq(ex, a, b);
         SASSERT(v == sat::null_bool_var || s().value(v) == l_false);
         if (v != sat::null_bool_var) 
-            m_explain.push_back(to_ptr(sat::literal(v, true)));
+            ex.push_back(to_ptr(sat::literal(v, true)));
     }
 
     bool solver::propagate(enode* a, enode* b, ext_justification_idx idx) {
@@ -285,6 +296,11 @@ namespace euf {
     }
 
     void solver::asserted(literal l) {
+
+        m_relevancy.asserted(l);
+        if (!m_relevancy.is_relevant(l))
+            return;        
+
         expr* e = m_bool_var2expr.get(l.var(), nullptr);
         TRACE("euf", tout << "asserted: " << l << "@" << s().scope_lvl() << " := " << mk_bounded_pp(e, m) << "\n";);
         if (!e) 
@@ -293,8 +309,8 @@ namespace euf {
         if (!n)
             return;
         bool sign = l.sign();   
-        m_egraph.set_value(n, sign ? l_false : l_true);
-        for (auto th : enode_th_vars(n))
+        m_egraph.set_value(n, sign ? l_false : l_true, justification::external(to_ptr(l)));
+        for (auto const& th : enode_th_vars(n))
             m_id2solver[th.get_id()]->asserted(l);
 
         size_t* c = to_ptr(l);
@@ -328,6 +344,8 @@ namespace euf {
     bool solver::unit_propagate() {
         bool propagated = false;
         while (!s().inconsistent()) {
+            if (m_relevancy.enabled())
+                m_relevancy.propagate();
             if (m_egraph.inconsistent()) {  
                 unsigned lvl = s().scope_lvl();
                 s().set_conflict(sat::justification::mk_ext_justification(lvl, conflict_constraint().to_index()));
@@ -344,9 +362,13 @@ namespace euf {
                 if (m_solvers[i]->unit_propagate())
                     propagated1 = true;
             
-            if (!propagated1)
-                break;
-            propagated = true;             
+            if (propagated1) {
+                propagated = true;
+                continue;
+            }
+            if (m_relevancy.enabled() && m_relevancy.can_propagate())
+                continue;
+            break;                  
         }
         DEBUG_CODE(if (!propagated && !s().inconsistent()) check_missing_eq_propagation(););
         return propagated;
@@ -421,12 +443,10 @@ namespace euf {
     void solver::propagate_th_eqs() {
         for (; m_egraph.has_th_eq() && !s().inconsistent() && !m_egraph.inconsistent(); m_egraph.next_th_eq()) {
             th_eq eq = m_egraph.get_th_eq();
-            if (eq.is_eq()) {
-                if (!is_self_propagated(eq))
-                    m_id2solver[eq.id()]->new_eq_eh(eq);    
-            }
-            else
+            if (!eq.is_eq())
                 m_id2solver[eq.id()]->new_diseq_eh(eq);
+            else if (!is_self_propagated(eq))
+                m_id2solver[eq.id()]->new_eq_eh(eq);                                
         }
     }
 
@@ -457,9 +477,6 @@ namespace euf {
 
         if (unit_propagate())
             return sat::check_result::CR_CONTINUE;
-
-        if (!init_relevancy())
-            give_up = true;
         
         unsigned num_nodes = m_egraph.num_nodes();
         auto apply_solver = [&](th_solver* e) {
@@ -518,15 +535,13 @@ namespace euf {
 
     void solver::push() {
         si.push();
-        scope s;
-        s.m_var_lim = m_var_trail.size();
+        scope s(m_var_trail.size());
         m_scopes.push_back(s);
         m_trail.push_scope();
         for (auto* e : m_solvers)
             e->push();
         m_egraph.push();
-        if (m_dual_solver)
-            m_dual_solver->push();
+        m_relevancy.push();
     }
 
     void solver::pop(unsigned n) {
@@ -536,6 +551,7 @@ namespace euf {
             e->pop(n);
         si.pop(n);
         m_egraph.pop(n);
+        m_relevancy.pop(n);
         scope const & sc = m_scopes[m_scopes.size() - n];
         for (unsigned i = m_var_trail.size(); i-- > sc.m_var_lim; ) {
             bool_var v = m_var_trail[i];
@@ -544,8 +560,6 @@ namespace euf {
         }
         m_var_trail.shrink(sc.m_var_lim);        
         m_scopes.shrink(m_scopes.size() - n);
-        if (m_dual_solver)
-            m_dual_solver->pop(n);
         SASSERT(m_egraph.num_scopes() == m_scopes.size());
         TRACE("euf_verbose", display(tout << "pop to: " << m_scopes.size() << "\n"););
     }
@@ -600,7 +614,7 @@ namespace euf {
             if (si.is_bool_op(e)) 
                 lit = literal(replay.m[e], false);
             else 
-                lit = si.internalize(e, true);
+                lit = si.internalize(e, false);
             VERIFY(lit.var() == v);     
             if (!m_egraph.find(e) && (!m.is_iff(e) && !m.is_or(e) && !m.is_and(e) && !m.is_not(e))) {
                 ptr_buffer<euf::enode> args;
@@ -718,6 +732,58 @@ namespace euf {
         }
     }
 
+    bool solver::is_relevant(bool_var v) const {
+        if (m_relevancy.enabled())
+            return m_relevancy.is_relevant(v);
+        auto* e = bool_var2enode(v);
+        return !e || is_relevant(e);
+    }
+
+    void solver::relevant_eh(euf::enode* n) {
+        if (m_qsolver)
+            m_qsolver->relevant_eh(n);
+        for (auto const& thv : enode_th_vars(n)) {
+            auto* th = m_id2solver.get(thv.get_id(), nullptr);
+            if (th && th != m_qsolver)
+                th->relevant_eh(n);
+        }       
+    }
+
+    bool solver::enable_ackerman_axioms(expr* e) const {
+        euf::enode* n = get_enode(e);
+        if (!n)
+            return false;
+        for (auto const& thv : enode_th_vars(n)) {
+            auto* th = m_id2solver.get(thv.get_id(), nullptr);
+            if (th && !th->enable_ackerman_axioms(n))
+                return false;
+        }
+        return true;
+    }
+
+    bool solver::is_fixed(euf::enode* n, expr_ref& val, sat::literal_vector& explain) {
+        if (n->bool_var() != sat::null_bool_var) {
+            switch (s().value(n->bool_var())) {
+            case l_true:
+                val = m.mk_true();
+                explain.push_back(sat::literal(n->bool_var()));
+                return true;                
+            case l_false:
+                val = m.mk_false();
+                explain.push_back(~sat::literal(n->bool_var()));
+                return true;
+            default:
+                return false;
+            }
+        }
+        for (auto const& thv : enode_th_vars(n)) {
+            auto* th = m_id2solver.get(thv.get_id(), nullptr);
+            if (th && !th->is_fixed(thv.get_var(), val, explain))
+                return true;
+        }
+        return false;
+    }
+
     void solver::pre_simplify() {
         for (auto* e : m_solvers)
             e->pre_simplify();
@@ -763,13 +829,18 @@ namespace euf {
     }
 
     bool solver::set_root(literal l, literal r) {
-        expr* e = bool_var2expr(l.var());
-        if (!e)
-            return true;
+        if (m_relevancy.enabled())
+            return false;
         bool ok = true;
         for (auto* s : m_solvers)
             if (!s->set_root(l, r))
                 ok = false;
+
+        if (!ok)
+            return false;
+        expr* e = bool_var2expr(l.var());
+        if (!e)
+            return true;
         if (m.is_eq(e) && !m.is_iff(e))
             ok = false;
         euf::enode* n = get_enode(e);
@@ -792,7 +863,7 @@ namespace euf {
         out << "bool-vars\n";
         for (unsigned v : m_var_trail) {
             expr* e = m_bool_var2expr[v];
-            out << v << ": " << e->get_id() << " " << m_solver->value(v) << " " << mk_bounded_pp(e, m, 1) << "\n";        
+            out << v << (is_relevant(v)?"":"n") << ": " << e->get_id() << " " << m_solver->value(v) << " " << mk_bounded_pp(e, m, 1) << "\n";        
         }
         for (auto* e : m_solvers)
             e->display(out);
@@ -991,9 +1062,9 @@ namespace euf {
 
     void solver::user_propagate_init(
         void* ctx,
-        ::solver::push_eh_t& push_eh,
-        ::solver::pop_eh_t& pop_eh,
-        ::solver::fresh_eh_t& fresh_eh) {
+        user_propagator::push_eh_t& push_eh,
+        user_propagator::pop_eh_t& pop_eh,
+        user_propagator::fresh_eh_t& fresh_eh) {
         m_user_propagator = alloc(user_solver::solver, *this);
         m_user_propagator->add(ctx, push_eh, pop_eh, fresh_eh);
         for (unsigned i = m_scopes.size(); i-- > 0; )

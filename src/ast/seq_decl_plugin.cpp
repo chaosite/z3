@@ -243,7 +243,7 @@ void seq_decl_plugin::init() {
     m_sigs[OP_RE_OF_PRED]        = alloc(psig, m, "re.of.pred", 1, 1, &predA, reA);
     m_sigs[OP_RE_REVERSE]        = alloc(psig, m, "re.reverse", 1, 1, &reA, reA);
     m_sigs[OP_RE_DERIVATIVE]     = alloc(psig, m, "re.derivative", 1, 2, AreA, reA);
-    m_sigs[_OP_RE_ANTIMOROV_UNION] = alloc(psig, m, "re.union", 1, 2, reAreA, reA);
+    m_sigs[_OP_RE_ANTIMIROV_UNION] = alloc(psig, m, "re.union", 1, 2, reAreA, reA);
     m_sigs[OP_SEQ_TO_RE]         = alloc(psig, m, "seq.to.re",  1, 1, &seqA, reA);
     m_sigs[OP_SEQ_IN_RE]         = alloc(psig, m, "seq.in.re", 1, 2, seqAreA, boolT);
     m_sigs[OP_SEQ_REPLACE_RE_ALL] = alloc(psig, m, "str.replace_re_all", 1, 3, seqAreAseqA, seqA);
@@ -414,9 +414,9 @@ func_decl* seq_decl_plugin::mk_func_decl(decl_kind k, unsigned num_parameters, p
     case OP_RE_COMPLEMENT:
     case OP_RE_REVERSE:
     case OP_RE_DERIVATIVE:
-    case _OP_RE_ANTIMOROV_UNION:
+    case _OP_RE_ANTIMIROV_UNION:
         m_has_re = true;
-        // fall-through
+        Z3_fallthrough;   
     case OP_SEQ_UNIT:
     case OP_STRING_ITOS:
     case OP_STRING_STOI:
@@ -516,6 +516,7 @@ func_decl* seq_decl_plugin::mk_func_decl(decl_kind k, unsigned num_parameters, p
     case OP_SEQ_REPLACE_RE_ALL:
     case OP_SEQ_REPLACE_RE:
         m_has_re = true;
+        Z3_fallthrough;
     case OP_SEQ_REPLACE_ALL:
         return mk_str_fun(k, arity, domain, range, k);        
 
@@ -705,6 +706,17 @@ bool seq_decl_plugin::is_value(app* e) const {
     }
 }
 
+bool seq_decl_plugin::is_model_value(app* e) const {
+    if (is_app_of(e, m_family_id, OP_SEQ_EMPTY)) 
+        return true;
+    if (is_app_of(e, m_family_id, OP_STRING_CONST)) 
+        return true;
+    if (is_app_of(e, m_family_id, OP_SEQ_UNIT) &&
+        m_manager->is_value(e->get_arg(0))) 
+        return true;
+    return false;
+}
+
 bool seq_decl_plugin::are_equal(app* a, app* b) const {
     if (a == b) return true;
     // handle concatenations
@@ -817,6 +829,39 @@ app* seq_util::mk_le(expr* ch1, expr* ch2) const {
 
 app* seq_util::mk_lt(expr* ch1, expr* ch2) const {
     return m.mk_not(mk_le(ch2, ch1));
+}
+
+bool seq_util::is_char_const_range(expr const* x, expr* e, unsigned& l, unsigned& u, bool& negated) const {
+    expr* a, * b, * e0, * e1, * e2, * lb, * ub;
+    e1 = e;
+    negated = (m.is_not(e, e1)) ? true : false;
+    if (m.is_eq(e1, a, b) && (a == x && is_const_char(b, l))) {
+        u = l;
+        return true;
+    }
+    if (is_char_le(e1, a, b) && a == x && is_const_char(b, u)) {
+        // (x <= u)
+        l = 0;
+        return true;
+    }
+    if (is_char_le(e1, a, b) && b == x && is_const_char(a, l)) {
+        // (l <= x)
+        u = max_char();
+        return true;
+    }
+    if (m.is_and(e1, e0, e2) && is_char_le(e0, lb, a) && a == x && is_const_char(lb, l) &&
+        is_char_le(e2, b, ub) && b == x && is_const_char(ub, u))
+        // (l <= x) & (x <= u)
+        return true;
+    if (m.is_eq(e1, a, b) && b == x && is_const_char(a, l)) {
+        u = l;
+        return true;
+    }
+    if (m.is_and(e1, e0, e2) && is_char_le(e0, a, ub) && a == x && is_const_char(ub, u) &&
+        is_char_le(e2, lb, b) && b == x && is_const_char(lb, l))
+        // (x <= u) & (l <= x)
+        return true;
+    return false;
 }
 
 bool seq_util::str::is_string(func_decl const* f, zstring& s) const {
@@ -1008,12 +1053,35 @@ sort* seq_util::rex::to_seq(sort* re) {
     return to_sort(re->get_parameter(0).get_ast());
 }
 
+app* seq_util::rex::mk_power(expr* r, unsigned n) {
+    parameter param(n);
+    return m.mk_app(m_fid, OP_RE_POWER, 1, &param, 1, &r);
+}
+
+
 app* seq_util::rex::mk_loop(expr* r, unsigned lo) {
     parameter param(lo);
     return m.mk_app(m_fid, OP_RE_LOOP, 1, &param, 1, &r);
 }
 
 app* seq_util::rex::mk_loop(expr* r, unsigned lo, unsigned hi) {
+    parameter params[2] = { parameter(lo), parameter(hi) };
+    return m.mk_app(m_fid, OP_RE_LOOP, 2, params, 1, &r);
+}
+
+expr* seq_util::rex::mk_loop_proper(expr* r, unsigned lo, unsigned hi)
+{
+    if (lo == 0 && hi == 0) {
+        sort* seq_sort = nullptr;
+        VERIFY(u.is_re(r, seq_sort));
+        // avoid creating a loop with both bounds 0
+        // such an expression is invalid as a loop
+        // it is BY DEFINITION = epsilon
+        return mk_epsilon(seq_sort);
+    }
+    if (lo == 1 && hi == 1)
+        // do not create a loop unless it actually is a loop
+        return r;
     parameter params[2] = { parameter(lo), parameter(hi) };
     return m.mk_app(m_fid, OP_RE_LOOP, 2, params, 1, &r);
 }
@@ -1111,24 +1179,23 @@ app* seq_util::rex::mk_epsilon(sort* seq_sort) {
 /*
   Produces compact view of concrete concatenations such as (abcd).
 */
-std::ostream& seq_util::rex::pp::print_seq(std::ostream& out, expr* s) const {
-    SASSERT(re.u.is_seq(s));
+bool seq_util::rex::pp::print_seq(std::ostream& out, expr* s) const {
     zstring z;
     expr* x, * j, * k, * l, * i, * x_;
     if (re.u.str.is_empty(s))
         out << "()";
-    else if (re.u.str.is_unit(s))
-        print_unit(out, s);
     else if (re.u.str.is_concat(s)) {
         expr_ref_vector es(re.m);
         re.u.str.get_concat(s, es);
         for (expr* e : es)
-            print_seq(out, e);
+            print(out, e);
     }
     else if (re.u.str.is_string(s, z)) {
         for (unsigned i = 0; i < z.length(); i++)
             out << (char)z[i];
     }
+    else if (re.u.str.is_at(s, x, i))
+        print(out, x) << "@", print(out, i);
     else if (re.u.str.is_extract(s, x, j, k)) {
         rational jv, iv;
         print(out, x);
@@ -1152,7 +1219,7 @@ std::ostream& seq_util::rex::pp::print_seq(std::ostream& out, expr* s) const {
                 out << "[" << jv.get_int32() << ",";
                 print(out, k);
                 out << "]";
-            }     
+            }
         }
         else {
             out << "[";
@@ -1162,9 +1229,9 @@ std::ostream& seq_util::rex::pp::print_seq(std::ostream& out, expr* s) const {
             out << "]";
         }
     }
-    else 
-        out << mk_pp(s, re.m);
-    return out;
+    else
+        return false;
+    return true;
 }
 
 /*
@@ -1172,9 +1239,9 @@ std::ostream& seq_util::rex::pp::print_seq(std::ostream& out, expr* s) const {
 */
 std::ostream& seq_util::rex::pp::print_range(std::ostream& out, expr* s1, expr* s2) const {
     out << "[";
-    print_unit(out, s1);
+    print(out, s1);
     out << "-";
-    print_unit(out, s2);
+    print(out, s2);
     out << "]";
     return out;
 }
@@ -1190,9 +1257,10 @@ bool seq_util::rex::pp::can_skip_parenth(expr* r) const {
 /*
   Specialize output for a unit sequence converting to visible ASCII characters if possible.
 */
-std::ostream& seq_util::rex::pp::print_unit(std::ostream& out, expr* s) const {
+bool seq_util::rex::pp::print_unit(std::ostream& out, expr* s) const {
     expr* e, * i;
     unsigned n = 0;
+
     if ((re.u.str.is_unit(s, e) && re.u.is_const_char(e, n)) || re.u.is_const_char(s, n)) {
         char c = (char)n;
         if (c == '\n')
@@ -1226,24 +1294,18 @@ std::ostream& seq_util::rex::pp::print_unit(std::ostream& out, expr* s) const {
             out << "\\x" << std::hex << n;
         else if (n <= 0xFFF)
             out << "\\u0" << std::hex << n;
-        else 
+        else
             out << "\\u" << std::hex << n;
     }
     else if (re.u.str.is_nth_i(s, e, i)) {
-        print(out, e);
-        out << "[" << mk_pp(i, re.m) << "]";
+        print(out, e) << "[";
+        print(out, i) << "]";
     }
-    else if (re.m.is_value(e))
-        out << mk_pp(e, re.m);
-    else if (is_app(e)) {
-        out << "(" << to_app(e)->get_decl()->get_name().str();
-        for (expr * arg : *to_app(e))
-            print(out << " ", arg);
-        out << ")";
-    }
+    else if (re.u.str.is_length(s, e))
+        print(out << "|", e) << "|";    
     else
-        out << mk_pp(s, re.m);
-    return out;
+        return false;
+    return true;
 }
 
 /*
@@ -1252,41 +1314,43 @@ std::ostream& seq_util::rex::pp::print_unit(std::ostream& out, expr* s) const {
 std::ostream& seq_util::rex::pp::print(std::ostream& out, expr* e) const {
     expr* r1 = nullptr, * r2 = nullptr, * s = nullptr, * s2 = nullptr;
     unsigned lo = 0, hi = 0;
+    arith_util a(re.m);
     rational v;
-    if (re.u.is_char(e))
-        print_unit(out, e);
-    else if (re.u.is_seq(e))
-        print_seq(out, e);
+    if (!e)
+        out << "null";
+    else if (print_unit(out, e))
+        ;
+    else if (print_seq(out, e))
+        ;
     else if (re.is_full_char(e))
         out << ".";
     else if (re.is_full_seq(e))
         out << ".*";
     else if (re.is_to_re(e, s))
-        print_seq(out, s);
+        print(out, s);
     else if (re.is_range(e, s, s2))
         print_range(out, s, s2);
     else if (re.is_epsilon(e))
-        // &#X03B5; = epsilon
-        out << (html_encode ? "&#X03B5;" : "()");
+        // &#x03B5; = epsilon
+        out << (html_encode ? "&#x03B5;" : "()");
     else if (re.is_empty(e))
-        // &#X2205; = emptyset
-        out << (html_encode ? "&#X2205;" : "[]");
+        // &#x2205; = emptyset
+        out << (html_encode ? "&#x2205;" : "[]");
     else if (re.is_concat(e, r1, r2)) {
         print(out, r1);
         print(out, r2);
     }
-    else if (re.is_antimorov_union(e, r1, r2) || re.is_union(e, r1, r2)) {
+    else if (re.is_antimirov_union(e, r1, r2) || re.is_union(e, r1, r2)) {
         out << "(";
         print(out, r1);
-        out << (html_encode ? "&#X22C3;" : "|");
+        out << (html_encode ? "&#x22C3;" : "|");
         print(out, r2);
         out << ")";
     }
-    else if (re.is_intersection(e, r1, r2))
-    {
+    else if (re.is_intersection(e, r1, r2)) {
         out << "(";
         print(out, r1);
-        out << (html_encode ? "&#X22C2;" : "&");
+        out << (html_encode ? "&#x22C2;" : "&");
         print(out, r2);
         out << ")";
     }
@@ -1323,12 +1387,9 @@ std::ostream& seq_util::rex::pp::print(std::ostream& out, expr* e) const {
         }
     }
     else if (re.is_loop(e, r1, lo)) {
-        if (can_skip_parenth(r1)) {
-            print(out, r1);
-            out << "{" << lo << ",}";
-        }
-        else
-        {
+        if (can_skip_parenth(r1)) 
+            print(out, r1) << "{" << lo << ",}";
+        else {
             out << "(";
             print(out, r1);
             out << "){" << lo << ",}";
@@ -1359,19 +1420,17 @@ std::ostream& seq_util::rex::pp::print(std::ostream& out, expr* e) const {
         out << ")";
     }
     else if (re.m.is_ite(e, s, r1, r2)) {
-        out << (html_encode ? "(&#X1D422;&#X1D41F; " : "(if ");
+        out << (html_encode ? "(&#x1D422;&#x1D41F; " : "(if ");
         print(out, s);
-        out << (html_encode ? " &#X1D42D;&#X1D5F5;&#X1D41E;&#X1D427; " : " then ");
+        out << (html_encode ? " &#x1D42D;&#x1D5F5;&#x1D41E;&#x1D427; " : " then ");
         print(out, r1);
-        out << (html_encode ? " &#X1D41E;&#X1D425;&#X1D600;&#X1D41E; " : " else ");
+        out << (html_encode ? " &#x1D41E;&#x1D425;&#x1D600;&#x1D41E; " : " else ");
         print(out, r2);
         out << ")";
     }
     else if (re.is_opt(e, r1)) {
-        if (can_skip_parenth(r1)) {
-            print(out, r1);
-            out << "?";
-        }
+        if (can_skip_parenth(r1)) 
+            print(out, r1) << "?";
         else {
             out << "(";
             print(out, r1);
@@ -1386,7 +1445,7 @@ std::ostream& seq_util::rex::pp::print(std::ostream& out, expr* e) const {
     else if (re.m.is_eq(e, r1, r2)) {
         out << "(";
         print(out, r1);
-        out << "=";
+        out << " = ";
         print(out, r2);
         out << ")";
     }
@@ -1394,10 +1453,22 @@ std::ostream& seq_util::rex::pp::print(std::ostream& out, expr* e) const {
         out << "!";
         print(out, r1);
     }
+    else if (a.is_add(e, s, s2) && a.is_numeral(s, v) && v < 0) 
+        print(out, s2) << " - " << -v;
+    else if (a.is_add(e, s, s2) && a.is_numeral(s2, v) && v < 0)
+        print(out, s) << " - " << -v;
+    else if (a.is_add(e, s, s2))
+        print(out, s) << " + ", print(out, s2);
+    else if (a.is_sub(e, s, s2) && a.is_numeral(s2, v) && v > 0)
+        print(out, s) << " - " << v;
+    else if (a.is_le(e, s, s2))
+        print(out << "(", s) << " <= ", print(out, s2) << ")";
     else if (re.m.is_value(e))
         out << mk_pp(e, re.m);
+    else if (is_app(e) && to_app(e)->get_num_args() == 0)
+        out << mk_pp(e, re.m);
     else if (is_app(e)) {
-        out << "(" << to_app(e)->get_decl()->get_name().str();
+        out << "(" << to_app(e)->get_decl()->get_name();
         for (expr* arg : *to_app(e))
             print(out << " ", arg);
         out << ")";
@@ -1409,8 +1480,7 @@ std::ostream& seq_util::rex::pp::print(std::ostream& out, expr* e) const {
 }
 
 std::ostream& seq_util::rex::pp::display(std::ostream& out) const {
-    print(out, ex);
-    return out;
+    return print(out, ex);
 }
 
 /*
@@ -1489,9 +1559,9 @@ seq_util::rex::info seq_util::rex::mk_info_rec(app* e) const {
     if (e->get_family_id() == u.get_family_id()) {
         switch (e->get_decl()->get_decl_kind()) {
         case OP_RE_EMPTY_SET:
-            return info(true, true, true, true, true, true, false, l_false, UINT_MAX, 0);
+            return info(true, l_false, UINT_MAX);
         case OP_RE_FULL_SEQ_SET:
-            return info(true, true, true, true, true, true, false, l_true, 0, 1);
+            return info(true, l_true, 0);
         case OP_RE_STAR:
             i1 = get_info_rec(e->get_arg(0));
             return i1.star();
@@ -1503,7 +1573,7 @@ seq_util::rex::info seq_util::rex::mk_info_rec(app* e) const {
         case OP_RE_OF_PRED:
             //TBD: check if the character predicate contains uninterpreted symbols or is nonground or is unsat
             //TBD: check if the range is unsat
-            return info(true, true, true, true, true, true, true, l_false, 1, 0);
+            return info(true, l_false, 1);
         case OP_RE_CONCAT:
             i1 = get_info_rec(e->get_arg(0));
             i2 = get_info_rec(e->get_arg(1));
@@ -1520,7 +1590,7 @@ seq_util::rex::info seq_util::rex::mk_info_rec(app* e) const {
             min_length = u.str.min_length(e->get_arg(0));
             is_value = m.is_value(e->get_arg(0));
             nullable = (is_value && min_length == 0 ? l_true : (min_length > 0 ? l_false : l_undef));
-            return info(true, true, is_value, true, true, true, (min_length == 1 && u.str.max_length(e->get_arg(0)) == 1), nullable, min_length, 0);
+            return info(is_value, nullable, min_length);
         case OP_RE_REVERSE:
             return get_info_rec(e->get_arg(0));
         case OP_RE_PLUS:
@@ -1556,14 +1626,7 @@ std::ostream& seq_util::rex::info::display(std::ostream& out) const {
     if (is_known()) {
         out << "info("
             << "nullable=" << (nullable == l_true ? "T" : (nullable == l_false ? "F" : "U")) << ", "
-            << "classical=" << (classical ? "T" : "F") << ", "
-            << "standard=" << (standard ? "T" : "F") << ", "
-            << "nonbranching=" << (nonbranching ? "T" : "F") << ", "
-            << "normalized=" << (normalized ? "T" : "F") << ", "
-            << "monadic=" << (monadic ? "T" : "F") << ", "
-            << "singleton=" << (singleton ? "T" : "F") << ", "
-            << "min_length=" << min_length << ", "
-            << "star_height=" << star_height << ")";
+            << "min_length=" << min_length << ")";
     }
     else if (is_valid())
         out << "UNKNOWN";
@@ -1583,13 +1646,13 @@ std::string seq_util::rex::info::str() const {
 
 seq_util::rex::info seq_util::rex::info::star() const {
     //if is_known() is false then all mentioned properties will remain false
-    return seq_util::rex::info(classical, classical, interpreted, nonbranching, normalized, monadic, false, l_true, 0, star_height + 1);
+    return seq_util::rex::info(interpreted, l_true, 0);
 }
 
 seq_util::rex::info seq_util::rex::info::plus() const {
     if (is_known()) {
         //plus never occurs in a normalized regex
-        return info(classical, classical, interpreted, nonbranching, false, monadic, false, nullable, min_length, star_height + 1);
+        return info(interpreted, nullable, min_length);
     }
     else
         return *this;
@@ -1598,14 +1661,14 @@ seq_util::rex::info seq_util::rex::info::plus() const {
 seq_util::rex::info seq_util::rex::info::opt() const {
     // if is_known() is false then all mentioned properties will remain false
     // optional construct never occurs in a normalized regex
-    return seq_util::rex::info(classical, classical, interpreted, nonbranching, false, monadic, false, l_true, 0, star_height);
+    return seq_util::rex::info(interpreted, l_true, 0);
 }
 
 seq_util::rex::info seq_util::rex::info::complement() const {
     if (is_known()) {
         lbool compl_nullable = (nullable == l_true ? l_false : (nullable == l_false ? l_true : l_undef));
         unsigned compl_min_length = (compl_nullable == l_false ? 1 : 0);
-        return info(false, standard, interpreted, nonbranching, normalized, monadic, false, compl_nullable, compl_min_length, star_height);
+        return info(interpreted, compl_nullable, compl_min_length);
     }
     else
         return *this;
@@ -1617,16 +1680,9 @@ seq_util::rex::info seq_util::rex::info::concat(seq_util::rex::info const& rhs, 
             unsigned m = min_length + rhs.min_length;
             if (m < min_length || m < rhs.min_length)
                 m = UINT_MAX;
-            return info(classical & rhs.classical,
-                classical && rhs.classical, //both args of concat must be classical for it to be standard
-                interpreted && rhs.interpreted,
-                nonbranching && rhs.nonbranching,
-                (normalized && !lhs_is_concat && rhs.normalized),
-                monadic && rhs.monadic,
-                false,
+            return info(interpreted && rhs.interpreted,
                 ((nullable == l_false || rhs.nullable == l_false) ? l_false : ((nullable == l_true && rhs.nullable == l_true) ? l_true : l_undef)),
-                m,
-                std::max(star_height, rhs.star_height));
+                m);
         }
         else
             return rhs;
@@ -1638,16 +1694,9 @@ seq_util::rex::info seq_util::rex::info::concat(seq_util::rex::info const& rhs, 
 seq_util::rex::info seq_util::rex::info::disj(seq_util::rex::info const& rhs) const {
     if (is_known() || rhs.is_known()) {
         //works correctly if one of the arguments is unknown
-        return info(classical & rhs.classical,
-            standard && rhs.standard,
-            interpreted && rhs.interpreted,
-            nonbranching && rhs.nonbranching,
-            normalized && rhs.normalized,
-            monadic && rhs.monadic,
-            singleton && rhs.singleton,
+        return info(interpreted && rhs.interpreted,
             ((nullable == l_true || rhs.nullable == l_true) ? l_true : ((nullable == l_false && rhs.nullable == l_false) ? l_false : l_undef)),
-            std::min(min_length, rhs.min_length),
-            std::max(star_height, rhs.star_height));
+            std::min(min_length, rhs.min_length));
     }
     else
         return rhs;
@@ -1656,16 +1705,9 @@ seq_util::rex::info seq_util::rex::info::disj(seq_util::rex::info const& rhs) co
 seq_util::rex::info seq_util::rex::info::conj(seq_util::rex::info const& rhs) const {
     if (is_known()) {
         if (rhs.is_known()) {
-            return info(false,
-                standard && rhs.standard,
-                interpreted && rhs.interpreted,
-                nonbranching && rhs.nonbranching,
-                normalized && rhs.normalized,
-                monadic && rhs.monadic,
-                singleton && rhs.singleton,
+            return info(interpreted && rhs.interpreted,
                 ((nullable == l_true && rhs.nullable == l_true) ? l_true : ((nullable == l_false || rhs.nullable == l_false) ? l_false : l_undef)),
-                std::max(min_length, rhs.min_length),
-                std::max(star_height, rhs.star_height));
+                std::max(min_length, rhs.min_length));
         }
         else
             return rhs;
@@ -1677,16 +1719,9 @@ seq_util::rex::info seq_util::rex::info::conj(seq_util::rex::info const& rhs) co
 seq_util::rex::info seq_util::rex::info::diff(seq_util::rex::info const& rhs) const {
     if (is_known()) {
         if (rhs.is_known()) {
-            return info(false,
-                standard & rhs.standard,
-                interpreted & rhs.interpreted,
-                nonbranching & rhs.nonbranching,
-                normalized & rhs.normalized,
-                monadic & rhs.monadic,
-                false,
+            return info(interpreted & rhs.interpreted,
                 ((nullable == l_true && rhs.nullable == l_false) ? l_true : ((nullable == l_false || rhs.nullable == l_false) ? l_false : l_undef)),
-                std::max(min_length, rhs.min_length),
-                std::max(star_height, rhs.star_height));
+                std::max(min_length, rhs.min_length));
         }
         else
             return rhs;
@@ -1701,7 +1736,9 @@ seq_util::rex::info seq_util::rex::info::orelse(seq_util::rex::info const& i) co
             // unsigned ite_min_length = std::min(min_length, i.min_length);
             // lbool ite_nullable = (nullable == i.nullable ? nullable : l_undef);
             // TBD: whether ite is interpreted or not depends on whether the condition is interpreted and both branches are interpreted
-            return info(false, false, false, false, normalized && i.normalized, monadic && i.monadic, singleton && i.singleton, nullable, std::min(min_length, i.min_length), std::max(star_height, i.star_height));
+            return info(false,
+                ((nullable == l_true && i.nullable == l_true) ? l_true : ((nullable == l_false && i.nullable == l_false) ? l_false : l_undef)),
+                std::min(min_length, i.min_length));
         }
         else
             return i;
@@ -1717,24 +1754,22 @@ seq_util::rex::info seq_util::rex::info::loop(unsigned lower, unsigned upper) co
         if (m > 0 && (m < min_length || m < lower))
             m = UINT_MAX;
         lbool loop_nullable = (nullable == l_true || lower == 0 ? l_true : nullable);
-        if (upper == UINT_MAX) {
-            // this means the loop is r{lower,*} and is therefore not normalized
-            // normalized regex would be r{lower,lower}r* and would in particular not use r{0,} for r*
-            return info(classical, classical, interpreted, nonbranching, false, singleton, false, loop_nullable, m, star_height + 1);
-        }
-        else {
-            bool loop_normalized = normalized;
-            // r{lower,upper} is not normalized if r is nullable but lower > 0
-            // r{0,1} is not normalized: it should be ()|r
-            // r{1,1} is not normalized: it should be r
-            // r{lower,upper} is not normalized if lower > upper it should then be [] (empty)
-            if ((nullable == l_true && lower > 0) || upper == 1 || lower > upper)
-                loop_normalized = false;
-            return info(classical, classical, interpreted, nonbranching, loop_normalized, singleton, false, loop_nullable, m, star_height);
-        }
+        return info(interpreted, loop_nullable, m);
     }
     else
         return *this;
+}
+
+seq_util::rex::info& seq_util::rex::info::operator=(info const& other) {
+    if (this == &other) {
+        return *this;
+    }
+
+    known = other.known;
+    interpreted = other.interpreted;
+    nullable = other.nullable;
+    min_length = other.min_length;
+    return *this;
 }
 
 

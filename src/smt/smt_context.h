@@ -46,7 +46,7 @@ Revision History:
 #include "util/statistics.h"
 #include "smt/fingerprints.h"
 #include "smt/proto_model/proto_model.h"
-#include "smt/user_propagator.h"
+#include "smt/theory_user_propagator.h"
 #include "model/model.h"
 #include "solver/progress_callback.h"
 #include "solver/assertions/asserted_formulas.h"
@@ -88,7 +88,7 @@ namespace smt {
         scoped_ptr<quantifier_manager>   m_qmanager;
         scoped_ptr<model_generator>      m_model_generator;
         scoped_ptr<relevancy_propagator> m_relevancy_propagator;
-        user_propagator*            m_user_propagator;
+        theory_user_propagator*          m_user_propagator;
         random_gen                  m_random;
         bool                        m_flushing; // (debug support) true when flushing
         mutable unsigned            m_lemma_id;
@@ -278,6 +278,9 @@ namespace smt {
             SASSERT(e_internalized(n));
             return m_app2enode[n->get_id()];
         }
+
+        void get_specrels(func_decl_set& rels) const;
+
 
         /**
            \brief Similar to get_enode, but returns 0 if n is to e_internalized.
@@ -770,6 +773,7 @@ namespace smt {
 
         void internalize_quantifier(quantifier * q, bool gate_ctx);
 
+        bool m_has_lambda = false;
         void internalize_lambda(quantifier * q);
 
         void internalize_formula_core(app * n, bool gate_ctx);
@@ -1130,6 +1134,8 @@ namespace smt {
 
         enode * get_enode_eq_to(func_decl * f, unsigned num_args, enode * const * args);
 
+        bool guess(bool_var var, lbool phase);
+
     protected:
         bool decide();
 
@@ -1189,7 +1195,6 @@ namespace smt {
 
         bool more_than_k_unassigned_literals(clause * cls, unsigned k);
 
-        void internalize_assertions();
 
         void asserted_inconsistent();
 
@@ -1573,7 +1578,7 @@ namespace smt {
 
         void log_stats();
 
-        void copy_user_propagator(context& src);
+        void copy_user_propagator(context& src, bool copy_registered);
 
     public:
         context(ast_manager & m, smt_params & fp, params_ref const & p = params_ref());
@@ -1605,6 +1610,8 @@ namespace smt {
         void assert_expr(expr * e);
 
         void assert_expr(expr * e, proof * pr);
+
+        void internalize_assertions();
 
         void push();
 
@@ -1662,7 +1669,7 @@ namespace smt {
 
         void get_levels(ptr_vector<expr> const& vars, unsigned_vector& depth);
 
-        expr_ref_vector get_trail();
+        expr_ref_vector get_trail(unsigned max_level);
 
         void get_model(model_ref & m);
 
@@ -1686,46 +1693,62 @@ namespace smt {
 
         void get_assertions(ptr_vector<expr> & result) { m_asserted_formulas.get_assertions(result); }
 
+        void get_units(expr_ref_vector& result);
+
         /*
          * user-propagator
          */
         void user_propagate_init(
             void*                 ctx, 
-            solver::push_eh_t&    push_eh,
-            solver::pop_eh_t&     pop_eh,
-            solver::fresh_eh_t&   fresh_eh);
+            user_propagator::push_eh_t&    push_eh,
+            user_propagator::pop_eh_t&     pop_eh,
+            user_propagator::fresh_eh_t&   fresh_eh);
 
-        void user_propagate_register_final(solver::final_eh_t& final_eh) {
+        void user_propagate_register_final(user_propagator::final_eh_t& final_eh) {
             if (!m_user_propagator) 
                 throw default_exception("user propagator must be initialized");
             m_user_propagator->register_final(final_eh);
         }
 
-        void user_propagate_register_fixed(solver::fixed_eh_t& fixed_eh) {
+        void user_propagate_register_fixed(user_propagator::fixed_eh_t& fixed_eh) {
             if (!m_user_propagator) 
                 throw default_exception("user propagator must be initialized");
             m_user_propagator->register_fixed(fixed_eh);
         }
         
-        void user_propagate_register_eq(solver::eq_eh_t& eq_eh) {
+        void user_propagate_register_eq(user_propagator::eq_eh_t& eq_eh) {
             if (!m_user_propagator) 
                 throw default_exception("user propagator must be initialized");
             m_user_propagator->register_eq(eq_eh);
         }
         
-        void user_propagate_register_diseq(solver::eq_eh_t& diseq_eh) {
+        void user_propagate_register_diseq(user_propagator::eq_eh_t& diseq_eh) {
             if (!m_user_propagator) 
                 throw default_exception("user propagator must be initialized");
             m_user_propagator->register_diseq(diseq_eh);
         }
 
-        unsigned user_propagate_register(expr* e) {
+        void user_propagate_register_expr(expr* e) {
             if (!m_user_propagator) 
                 throw default_exception("user propagator must be initialized");
-            return m_user_propagator->add_expr(e);
+            m_user_propagator->add_expr(e, true);
         }
-        
+
+        void user_propagate_register_created(user_propagator::created_eh_t& r) {
+            if (!m_user_propagator)
+                throw default_exception("user propagator must be initialized");
+            m_user_propagator->register_created(r);
+        }
+
+        void user_propagate_register_decide(user_propagator::decide_eh_t& r) {
+            if (!m_user_propagator)
+                throw default_exception("user propagator must be initialized");
+            m_user_propagator->register_decide(r);
+        }
+
         bool watches_fixed(enode* n) const;
+
+        bool decide_user_interference(bool_var& var, bool& is_pos);
 
         void assign_fixed(enode* n, expr* val, unsigned sz, literal const* explain);
 
@@ -1736,6 +1759,8 @@ namespace smt {
         void assign_fixed(enode* n, expr* val, literal explain) {
             assign_fixed(n, val, 1, &explain);
         }
+
+        bool is_fixed(enode* n, expr_ref& val, literal_vector& explain);
 
         void display(std::ostream & out) const;
 
